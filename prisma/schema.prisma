@@ -1,0 +1,618 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────
+
+enum ShopRole {
+  OWNER
+  MANAGER
+  CASHIER
+}
+
+// Polymorphic discriminator used by CartItem / OrderLineItem.itemId,
+// which points to either Product.id or Service.id depending on this value.
+// Not enforced by a DB foreign key (Prisma can't do polymorphic FKs) —
+// this must be validated in the service layer.
+enum ItemType {
+  PRODUCT
+  SERVICE
+}
+
+enum DiscountType {
+  PERCENT
+  FLAT
+}
+
+enum StockMovementType {
+  SALE
+  RESTOCK
+  WRITE_OFF
+  REFUND
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADJUSTMENT
+}
+
+enum OrderStatus {
+  OPEN // cart just converted, awaiting payment
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+enum CartStatus {
+  ACTIVE
+  COMPLETED // converted into an Order
+  ABANDONED // auto-expired by the cron cleanup job
+}
+
+// Assumption: cash, mpesa, and bank transfer as the three payment rails, plus
+// CREDIT for sales settled against a customer's account rather than collected now.
+enum PaymentMethod {
+  CASH
+  MPESA
+  BANK_TRANSFER
+  CREDIT
+}
+
+// Reflects the manual "customer sends money, staff records + later confirms" workflow.
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+// MANUAL: staff types in a reference code and reconciles it against the Safaricom
+// business statement by hand. STK_PUSH: Daraja API push, confirmed automatically
+// via callback. Same Payment/PaymentStatus model serves both — this just tags how
+// confirmation happens.
+enum PaymentChannel {
+  MANUAL
+  STK_PUSH
+}
+
+enum MpesaAccountType {
+  TILL
+  PAYBILL
+}
+
+// Mirrors StockMovementType — an append-only ledger for a customer's debt.
+// Positive amount = balance increases (they owe more), negative = balance decreases (they paid).
+enum CreditTransactionType {
+  CREDIT_SALE
+  REPAYMENT
+  ADJUSTMENT
+}
+
+enum NotificationType {
+  LOW_STOCK
+  BELOW_FLOOR_DISCOUNT
+  CART_ABANDONED
+  EXPENSE_LOGGED
+  PAYMENT_PENDING
+  CREDIT_LIMIT_EXCEEDED
+  CREDIT_OVERDUE
+  GENERIC
+}
+
+// ─────────────────────────────────────────────────────────
+// TENANCY: COMPANY → SHOP → STAFF
+// ─────────────────────────────────────────────────────────
+
+model Company {
+  id                  String   @id @default(uuid())
+  name                String
+  vatPct              Float    @default(0)
+  defaultMinMarginPct Float    @default(0) // fallback profit floor, overridable per-Product
+  globalDiscountPct   Float    @default(0) // default discount applied unless overridden at line-item level
+  metadata            Json? // catch-all for anything company-specific that doesn't need its own column
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  shops     Shop[]
+  users     User[]
+  customers Customer[]
+
+  @@map("companies")
+}
+
+model Shop {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  vatPct              Float    @default(0)
+  defaultMinMarginPct Float    @default(0) // fallback profit floor, overridable per-Product
+  globalDiscountPct   Float    @default(0)
+  metadata  Json? // catch-all for anything shop-specific that doesn't need its own column
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company       Company        @relation(fields: [companyId], references: [id])
+  products      Product[]
+  services      Service[]
+  carts         Cart[]
+  orders        Order[]
+  expenses      Expense[]
+  writeOffs     WriteOff[]
+  userRoles     UserShopRole[]
+  notifications Notification[]
+  mpesaAccounts MpesaAccount[]
+
+  @@index([companyId])
+  @@map("shops")
+}
+
+// One row per Kinde-authenticated person. All other tables reference User.id,
+// never kinde_id directly — insulates the schema from any future auth changes.
+model User {
+  id        String   @id @default(uuid())
+  companyId String
+  kindeId   String   @unique
+  name      String
+  email     String   @unique
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  defaulOwner Boolean @default(false) // true for the first user created in a company, false for all others
+
+  company                  Company             @relation(fields: [companyId], references: [id])
+  shopRoles                UserShopRole[]
+  ordersHandled            Order[]             @relation("OrderStaff")
+  cartsHandled             Cart[]              @relation("CartStaff")
+  writeOffs                WriteOff[]          @relation("WriteOffStaff")
+  refundsIssued            Refund[]            @relation("RefundStaff")
+  expensesRecorded         Expense[]           @relation("ExpenseRecordedBy")
+  paymentsRecorded         Payment[]           @relation("PaymentRecordedBy")
+  paymentsVerified         Payment[]           @relation("PaymentVerifiedBy")
+  discountsApplied         OrderLineItem[]     @relation("DiscountAppliedBy")
+  creditTransactionsLogged CreditTransaction[] @relation("CreditTransactionRecordedBy")
+  creditRepaymentsRecorded CreditRepayment[]   @relation("CreditRepaymentRecordedBy")
+  creditRepaymentsVerified CreditRepayment[]   @relation("CreditRepaymentVerifiedBy")
+
+  @@index([companyId])
+  @@map("users")
+}
+
+// Many-to-many: a user can hold a different role at each shop they work.
+model UserShopRole {
+  id        String   @id @default(uuid())
+  userId    String
+  shopId    String
+  role      ShopRole
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  shop Shop @relation(fields: [shopId], references: [id])
+
+  @@unique([userId, shopId])
+  @@index([shopId])
+  @@map("user_shop_roles")
+}
+
+// ─────────────────────────────────────────────────────────
+// CATALOG: PRODUCTS & SERVICES (per-shop, not shared)
+// ─────────────────────────────────────────────────────────
+
+model Product {
+  id           String   @id @default(uuid())
+  shopId       String
+  name         String
+  barcode      String
+  price        Float // tag / list price
+  costPrice    Float
+  minMarginPct Float? // overrides Company.defaultMinMarginPct when set
+  minPrice     Float? // explicit floor override; takes precedence over minMarginPct if set
+  category     String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shop           Shop            @relation(fields: [shopId], references: [id])
+  stockCache     StockCache?
+  stockMovements StockMovement[]
+  writeOffs      WriteOff[]
+
+  @@unique([shopId, barcode]) // barcode is unique per shop, not globally
+  @@index([shopId])
+  @@map("products")
+}
+
+// Fast-read cache of current stock, kept in sync with StockMovement inserts
+// inside the same DB transaction. StockMovement remains the source of truth.
+model StockCache {
+  id              String   @id @default(uuid())
+  productId       String   @unique
+  currentQuantity Int      @default(0)
+  updatedAt       DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("stock_cache")
+}
+
+// Append-only ledger. Never updated or deleted — always insert a new row.
+model StockMovement {
+  id            String            @id @default(uuid())
+  productId     String
+  quantityDelta Int // negative for sales/write-offs, positive for restocks/refunds
+  type          StockMovementType
+  referenceId   String? // points to the Order, WriteOff, or Refund that caused this
+  note          String?
+  createdById   String?
+  createdAt     DateTime          @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([productId])
+  @@index([type])
+  @@map("stock_movements")
+}
+
+// Income-generating actions that aren't physical product sales
+// (e.g. printing, browsing, repairs, software installs).
+model Service {
+  id        String   @id @default(uuid())
+  shopId    String
+  name      String
+  price     Float
+  category  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id])
+
+  @@index([shopId])
+  @@map("services")
+}
+
+// ─────────────────────────────────────────────────────────
+// CUSTOMERS & CREDIT (accounts receivable)
+// ─────────────────────────────────────────────────────────
+
+// Only needed for customers you extend credit to, or otherwise want to track —
+// anonymous walk-in cash/mpesa sales don't require a Customer at all.
+model Customer {
+  id          String   @id @default(uuid())
+  companyId   String
+  name        String
+  phone       String
+  email       String?
+  creditLimit Float? // null = no explicit limit enforced
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company            Company             @relation(fields: [companyId], references: [id])
+  orders             Order[]
+  creditAccount      CreditAccountCache?
+  creditTransactions CreditTransaction[]
+  creditRepayments   CreditRepayment[]
+
+  @@unique([companyId, phone])
+  @@index([companyId])
+  @@map("customers")
+}
+
+// Fast-read cache of what a customer currently owes, kept in sync with
+// CreditTransaction inserts inside the same DB transaction — same pattern as StockCache.
+model CreditAccountCache {
+  id             String   @id @default(uuid())
+  customerId     String   @unique
+  currentBalance Float    @default(0) // positive = amount the customer owes the shop
+  updatedAt      DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@map("credit_account_cache")
+}
+
+// Append-only ledger. Never updated or deleted — always insert a new row.
+// A CREDIT_SALE row is created the moment an Order is settled via PaymentMethod.CREDIT.
+// REPAYMENT rows come from a confirmed CreditRepayment. Not tied 1:1 to a single
+// Order, since a customer's repayment often pays down several orders at once.
+model CreditTransaction {
+  id           String                @id @default(uuid())
+  customerId   String
+  orderId      String? // set for CREDIT_SALE, null for REPAYMENT/ADJUSTMENT
+  type         CreditTransactionType
+  amount       Float // positive increases balance owed, negative decreases it
+  dueDate      DateTime? // optional follow-up date, set on CREDIT_SALE
+  note         String?
+  recordedById String?
+  createdAt    DateTime              @default(now())
+
+  customer   Customer @relation(fields: [customerId], references: [id])
+  order      Order?   @relation(fields: [orderId], references: [id])
+  recordedBy User?    @relation("CreditTransactionRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([customerId])
+  @@index([orderId])
+  @@map("credit_transactions")
+}
+
+// A customer paying down their balance. Same manual-verification shape as Payment,
+// since a repayment via M-Pesa needs the same reference-code reconciliation.
+// Service layer should restrict `method` to CASH / MPESA / BANK_TRANSFER (not CREDIT).
+model CreditRepayment {
+  id            String         @id @default(uuid())
+  customerId    String
+  amount        Float
+  method        PaymentMethod
+  channel       PaymentChannel @default(MANUAL)
+  referenceCode String?
+  status        PaymentStatus  @default(PENDING)
+  recordedById  String
+  verifiedById  String?
+  verifiedAt    DateTime?
+  confirmedAt   DateTime?
+  createdAt     DateTime       @default(now())
+
+  customer   Customer @relation(fields: [customerId], references: [id])
+  recordedBy User     @relation("CreditRepaymentRecordedBy", fields: [recordedById], references: [id])
+  verifiedBy User?    @relation("CreditRepaymentVerifiedBy", fields: [verifiedById], references: [id])
+
+  @@index([customerId])
+  @@map("credit_repayments")
+}
+
+// ─────────────────────────────────────────────────────────
+// CART (persisted, converts into an Order at checkout)
+// ─────────────────────────────────────────────────────────
+
+model Cart {
+  id        String     @id @default(uuid())
+  shopId    String
+  staffId   String
+  status    CartStatus @default(ACTIVE)
+  orderId   String?    @unique // set once this cart converts into an Order
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt // must be bumped on every item add/remove — the cron job keys off this
+
+  shop  Shop       @relation(fields: [shopId], references: [id])
+  staff User       @relation("CartStaff", fields: [staffId], references: [id])
+  order Order?     @relation(fields: [orderId], references: [id])
+  items CartItem[]
+
+  @@index([shopId, status])
+  @@map("carts")
+}
+
+// The Safaricom till/paybill a shop collects payments into. Reconciliation staff
+// use accountNumber to know which statement to check a referenceCode against.
+// NOTE: Daraja API credentials (consumer key/secret, passkey) must NOT live here —
+// keep those in env vars / a secrets manager, never in the database.
+model MpesaAccount {
+  id            String           @id @default(uuid())
+  shopId        String
+  accountType   MpesaAccountType
+  accountNumber String // the till or paybill number itself
+  label         String? // e.g. "Main till", "Repairs paybill"
+  isActive      Boolean          @default(true)
+  createdAt     DateTime         @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id])
+
+  @@index([shopId])
+  @@map("mpesa_accounts")
+}
+
+model CartItem {
+  id                String        @id @default(uuid())
+  cartId            String
+  itemType          ItemType
+  itemId            String // Product.id or Service.id depending on itemType
+  quantity          Int           @default(1)
+  originalUnitPrice Float
+  discountType      DiscountType?
+  discountValue     Float?
+  finalUnitPrice    Float
+  belowFloor        Boolean       @default(false)
+  discountReason    String?
+  createdAt         DateTime      @default(now())
+
+  cart Cart @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+// ─────────────────────────────────────────────────────────
+// ORDERS (immutable once created — snapshot of the cart at checkout)
+// ─────────────────────────────────────────────────────────
+
+model Order {
+  id         String      @id @default(uuid())
+  shopId     String
+  staffId    String
+  customerId String? // required at the service layer whenever any Payment.method = CREDIT
+  status     OrderStatus @default(OPEN)
+  subtotal   Float
+  vatAmount  Float       @default(0)
+  total      Float
+  amountPaid Float       @default(0) // sum of CONFIRMED payments, kept in sync on payment writes
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  shop               Shop                @relation(fields: [shopId], references: [id])
+  staff              User                @relation("OrderStaff", fields: [staffId], references: [id])
+  customer           Customer?           @relation(fields: [customerId], references: [id])
+  cart               Cart?
+  lineItems          OrderLineItem[]
+  payments           Payment[]
+  refunds            Refund[]
+  creditTransactions CreditTransaction[]
+
+  @@index([shopId, status])
+  @@index([customerId])
+  @@map("orders")
+}
+
+model OrderLineItem {
+  id                  String        @id @default(uuid())
+  orderId             String
+  itemType            ItemType
+  itemId              String // Product.id or Service.id depending on itemType
+  quantity            Int
+  originalUnitPrice   Float // snapshot of tag price at time of sale
+  discountType        DiscountType?
+  discountValue       Float?
+  finalUnitPrice      Float
+  lineTotal           Float
+  belowFloor          Boolean       @default(false) // true if finalUnitPrice < computed profit floor
+  discountReason      String?
+  discountAppliedById String?
+  createdAt           DateTime      @default(now())
+
+  order             Order            @relation(fields: [orderId], references: [id])
+  discountAppliedBy User?            @relation("DiscountAppliedBy", fields: [discountAppliedById], references: [id])
+  refundLineItems   RefundLineItem[]
+
+  @@index([orderId])
+  @@map("order_line_items")
+}
+
+// ─────────────────────────────────────────────────────────
+// PAYMENTS (cash / mpesa / bank transfer, split payments supported)
+// ─────────────────────────────────────────────────────────
+
+model Payment {
+  id            String         @id @default(uuid())
+  orderId       String
+  method        PaymentMethod
+  channel       PaymentChannel @default(MANUAL)
+  amount        Float
+  status        PaymentStatus  @default(PENDING)
+  referenceCode String? // MANUAL: code the customer reads out from their M-Pesa SMS
+
+  recordedById String // staff who logged the payment (took the code from the customer)
+  verifiedById String? // MANUAL only: staff/owner who cross-checked it against the Safaricom statement
+  verifiedAt   DateTime? // when that reconciliation happened
+
+  // STK_PUSH only — populated by the Daraja API callback once that flow exists
+  stkCheckoutRequestId String?
+  stkMerchantRequestId String?
+  stkResultCode        String?
+  stkResultDesc        String?
+
+  confirmedAt DateTime? // set the moment status becomes CONFIRMED, regardless of channel
+  createdAt   DateTime  @default(now())
+
+  order      Order @relation(fields: [orderId], references: [id])
+  recordedBy User  @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
+  verifiedBy User? @relation("PaymentVerifiedBy", fields: [verifiedById], references: [id])
+
+  @@index([orderId])
+  @@index([method, status])
+  @@index([referenceCode])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────────────────
+// REFUNDS & WRITE-OFFS
+// ─────────────────────────────────────────────────────────
+
+model Refund {
+  id          String   @id @default(uuid())
+  orderId     String
+  staffId     String
+  reason      String
+  totalAmount Float
+  createdAt   DateTime @default(now())
+
+  order     Order            @relation(fields: [orderId], references: [id])
+  staff     User             @relation("RefundStaff", fields: [staffId], references: [id])
+  lineItems RefundLineItem[]
+
+  @@index([orderId])
+  @@map("refunds")
+}
+
+// Supports partial refunds — refunding some line items/quantities but not others.
+model RefundLineItem {
+  id              String @id @default(uuid())
+  refundId        String
+  orderLineItemId String
+  quantity        Int
+  amount          Float
+
+  refund        Refund        @relation(fields: [refundId], references: [id])
+  orderLineItem OrderLineItem @relation(fields: [orderLineItemId], references: [id])
+
+  @@index([refundId])
+  @@map("refund_line_items")
+}
+
+// Stock leaving inventory outside of a sale (damaged, expired, lost, theft).
+// Not tied to an Order — writes directly to the StockMovement ledger.
+model WriteOff {
+  id        String   @id @default(uuid())
+  shopId    String
+  productId String
+  staffId   String
+  quantity  Int
+  reason    String
+  note      String?
+  createdAt DateTime @default(now())
+
+  shop    Shop    @relation(fields: [shopId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+  staff   User    @relation("WriteOffStaff", fields: [staffId], references: [id])
+
+  @@index([shopId])
+  @@index([productId])
+  @@map("write_offs")
+}
+
+// ─────────────────────────────────────────────────────────
+// EXPENSES
+// ─────────────────────────────────────────────────────────
+
+model Expense {
+  id           String   @id @default(uuid())
+  shopId       String
+  recordedById String // who
+  amount       Float // how much
+  category     String // e.g. "Rent", "Utilities", "Supplier restock", "Repairs"
+  description  String // why
+  createdAt    DateTime @default(now())
+
+  shop       Shop @relation(fields: [shopId], references: [id])
+  recordedBy User @relation("ExpenseRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([shopId])
+  @@index([category])
+  @@map("expenses")
+}
+
+// ─────────────────────────────────────────────────────────
+// NOTIFICATIONS (global service, optionally shop-scoped)
+// ─────────────────────────────────────────────────────────
+
+model Notification {
+  id        String           @id @default(uuid())
+  shopId    String?
+  type      NotificationType
+  message   String
+  isRead    Boolean          @default(false)
+  metadata  Json? // e.g. { orderLineItemId, discountPct } for a BELOW_FLOOR_DISCOUNT alert
+  createdAt DateTime         @default(now())
+
+  shop Shop? @relation(fields: [shopId], references: [id])
+
+  @@index([shopId, isRead])
+  @@map("notifications")
+}
