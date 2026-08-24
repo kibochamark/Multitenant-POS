@@ -130,15 +130,15 @@ model Company {
 }
 
 model Shop {
-  id        String   @id @default(uuid())
-  companyId String
-  name      String
+  id                  String   @id @default(uuid())
+  companyId           String
+  name                String
   vatPct              Float    @default(0)
   defaultMinMarginPct Float    @default(0) // fallback profit floor, overridable per-Product
   globalDiscountPct   Float    @default(0)
-  metadata  Json? // catch-all for anything shop-specific that doesn't need its own column
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  metadata            Json? // catch-all for anything shop-specific that doesn't need its own column
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   company       Company        @relation(fields: [companyId], references: [id])
   products      Product[]
@@ -158,15 +158,15 @@ model Shop {
 // One row per Kinde-authenticated person. All other tables reference User.id,
 // never kinde_id directly — insulates the schema from any future auth changes.
 model User {
-  id        String   @id @default(uuid())
-  companyId String
-  kindeId   String   @unique
-  name      String
-  email     String   @unique
-  phone     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  defaulOwner Boolean @default(false) // true for the first user created in a company, false for all others
+  id           String   @id @default(uuid())
+  companyId    String
+  kindeId      String   @unique
+  name         String
+  email        String   @unique
+  phone        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  defaultOwner Boolean  @default(false) @map("defaulOwner") // true for the first user created in a company, false for all others
 
   company                  Company             @relation(fields: [companyId], references: [id])
   shopRoles                UserShopRole[]
