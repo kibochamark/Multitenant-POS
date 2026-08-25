@@ -25,8 +25,10 @@ export class CompanyController {
   @HttpCode(201)
   async createCompany(@Body() companyData: CompanyDTO) {
     try {
+      console.log('Creating company with data:', companyData);
       const createdCompany =
         await this.companyService.createCompany(companyData);
+        console.log('Created company response:', createdCompany);
       if (createdCompany.status === 201) {
         return {
           status: 201,

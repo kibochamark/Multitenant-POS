@@ -11,6 +11,11 @@ export interface AuthenticatedUser {
   defaultOwner: boolean;
 }
 
+export interface KindeIdentity {
+  kindeId: string;
+  email?: string;
+}
+
 export interface ShopAccessContext {
   shopId: string;
   role: ShopRole | null;
@@ -18,6 +23,7 @@ export interface ShopAccessContext {
 }
 
 export interface AuthenticatedRequest extends Request {
-  user: AuthenticatedUser;
+  auth: KindeIdentity;
+  user?: AuthenticatedUser;
   shopAccess?: ShopAccessContext;
 }

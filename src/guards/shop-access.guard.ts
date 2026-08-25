@@ -38,7 +38,8 @@ export class ShopAccessGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    if (!request.user) {
+    const user = request.user;
+    if (!user) {
       throw new UnauthorizedException();
     }
 
@@ -60,11 +61,11 @@ export class ShopAccessGuard implements CanActivate {
     }
 
     // A default owner has every-shop access only inside their own company.
-    if (shop.companyId !== request.user.companyId) {
+    if (shop.companyId !== user.companyId) {
       throw new ForbiddenException('You cannot access this shop');
     }
 
-    if (request.user.defaultOwner) {
+    if (user.defaultOwner) {
       request.shopAccess = { shopId, role: null, ownerBypass: true };
       return true;
     }
@@ -72,7 +73,7 @@ export class ShopAccessGuard implements CanActivate {
     const membership = await this.prisma.userShopRole.findUnique({
       where: {
         userId_shopId: {
-          userId: request.user.id,
+          userId: user.id,
           shopId,
         },
       },
