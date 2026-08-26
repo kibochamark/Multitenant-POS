@@ -77,6 +77,9 @@ export class CartService {
       staffId,
       data.stationId.trim(),
       data.customerId,
+      data.settlement ?? 'PAY_NOW',
+      data.dueDate ? new Date(data.dueDate) : undefined,
+      data.creditNote?.trim() || undefined,
     );
   }
 }

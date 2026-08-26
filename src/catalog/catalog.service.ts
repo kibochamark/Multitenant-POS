@@ -8,6 +8,7 @@ import { Prisma } from 'generated/prisma/client';
 import { CreateProductDto } from './dto/create-product.dto';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { CatalogRepository } from './catalog.repository';
+import { ProductImportQueueService, ProductImportStatus } from './product-import-queue.service';
 import {
   ProductListQueryDto,
   ProductSearchQueryDto,
@@ -24,7 +25,16 @@ import { UpdateServiceDto } from './dto/update-service.dto';
 export class CatalogService {
   private readonly logger = new Logger(CatalogService.name);
 
-  constructor(private readonly catalogRepository: CatalogRepository) {}
+  constructor(private readonly catalogRepository: CatalogRepository, private readonly productImports: ProductImportQueueService) {}
+
+  async importProducts(shopId: string, userId: string, file: Express.Multer.File) {
+    this.logger.log(`Queueing product import for shop ${shopId}`);
+    return this.productImports.enqueue(shopId, userId, file);
+  }
+
+  productImportStatus(shopId: string, jobId: string): Promise<ProductImportStatus> {
+    return this.productImports.status(shopId, jobId);
+  }
 
   async generateBarcode(shopId: string) {
     this.logger.log(`Preparing internal barcode generation for shop ${shopId}`);

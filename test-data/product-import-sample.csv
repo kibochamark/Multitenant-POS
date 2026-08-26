@@ -1,0 +1,9 @@
+name,price,costPrice,quantityAtHand,category,minMarginPct,minPrice,lowStockThreshold
+Logitech M185 Wireless Mouse,1850.00,1200.00,24,Accessories,20,1500.00,5
+HP USB-C 65W Laptop Charger,4500.00,3100.00,12,Chargers,18,3800.00,3
+SanDisk 64GB USB 3.0 Flash Drive,1200.00,750.00,30,Storage,15,950.00,8
+Cat6 Ethernet Cable 5 Metres,850.00,420.00,40,Networking,20,600.00,10
+Kingston 8GB DDR4 Laptop RAM,4200.00,3000.00,10,Components,15,3600.00,3
+Epson 003 Black Ink Bottle,1350.00,950.00,18,Printer Supplies,12,1150.00,5
+Oraimo 10000mAh Power Bank,3200.00,2250.00,15,Power,18,2750.00,4
+HDMI Cable 2 Metres,700.00,350.00,35,Cables,20,500.00,8

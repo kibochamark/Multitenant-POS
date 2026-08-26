@@ -1,4 +1,6 @@
 import {
+  IsDateString,
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
@@ -16,4 +18,17 @@ export class CheckoutCartDto {
   @IsOptional()
   @IsUUID()
   customerId?: string;
+
+  @IsOptional()
+  @IsIn(['PAY_NOW', 'CREDIT'])
+  settlement?: 'PAY_NOW' | 'CREDIT';
+
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  creditNote?: string;
 }

@@ -10,6 +10,10 @@ import {
   ItemType,
   NotificationType,
   OrderStatus,
+  PaymentChannel,
+  PaymentMethod,
+  PaymentStatus,
+  CreditTransactionType,
   Prisma,
   StockMovementType,
 } from 'generated/prisma/client';
@@ -307,6 +311,9 @@ export class CartRepository {
     staffId: string,
     stationId: string,
     customerId?: string,
+    settlement: 'PAY_NOW' | 'CREDIT' = 'PAY_NOW',
+    dueDate?: Date,
+    creditNote?: string,
   ) {
     this.logger.log(`Checking out active cart in shop ${shopId}`);
 
@@ -336,14 +343,17 @@ export class CartRepository {
           where: { id: shopId },
           select: { companyId: true, company: { select: { vatPct: true } } },
         });
+        let customer: { id: string; creditLimit: Prisma.Decimal; creditAccount: { currentBalance: Prisma.Decimal } | null } | null = null;
         if (customerId) {
-          const customer = await tx.customer.findFirst({
+          customer = await tx.customer.findFirst({
             where: { id: customerId, companyId: shop.companyId },
-            select: { id: true },
+            select: { id: true, creditLimit: true, creditAccount: { select: { currentBalance: true } } },
           });
           if (!customer)
             throw new NotFoundException('Customer not found in this company');
         }
+        if (settlement === 'CREDIT' && !customer)
+          throw new ConflictException('Select a customer before creating a credit sale');
 
         const productIds = cart.items
           .filter((item) => item.itemType === ItemType.PRODUCT)
@@ -390,6 +400,12 @@ export class CartRepository {
           : total.mul(vatPct).div(vatPct.add(100)).toDecimalPlaces(2);
         const subtotal = total.sub(vatAmount).toDecimalPlaces(2);
 
+        if (settlement === 'CREDIT' && customer) {
+          const currentBalance = customer.creditAccount?.currentBalance ?? new Prisma.Decimal(0);
+          if (currentBalance.add(total).greaterThan(customer.creditLimit))
+            throw new ConflictException('Customer credit limit would be exceeded');
+        }
+
         // The order and its lines are immutable snapshots. Later catalog-price
         // edits cannot change what this customer was charged.
         const order = await tx.order.create({
@@ -406,6 +422,43 @@ export class CartRepository {
           },
           select: { id: true },
         });
+
+        // Credit is a receivable, not money received. At credit checkout we
+        // allocate the order to the customer account automatically so the
+        // cashier does not have to submit a fake cash/M-Pesa payment.
+        if (settlement === 'CREDIT' && customer) {
+          await tx.payment.create({
+            data: {
+              orderId: order.id,
+              method: PaymentMethod.CREDIT,
+              channel: PaymentChannel.MANUAL,
+              amount: total,
+              status: PaymentStatus.CONFIRMED,
+              recordedById: staffId,
+              confirmedAt: new Date(),
+            },
+          });
+          await tx.creditTransaction.create({
+            data: {
+              customerId: customer.id,
+              orderId: order.id,
+              type: CreditTransactionType.CREDIT_SALE,
+              amount: total,
+              ...(dueDate ? { dueDate } : {}),
+              ...(creditNote ? { note: creditNote } : {}),
+              recordedById: staffId,
+            },
+          });
+          await tx.creditAccountCache.upsert({
+            where: { customerId: customer.id },
+            create: { customerId: customer.id, currentBalance: total },
+            update: { currentBalance: { increment: total } },
+          });
+          await tx.order.update({
+            where: { id: order.id },
+            data: { amountPaid: total, status: OrderStatus.PAID },
+          });
+        }
 
         // Stock is decremented conditionally. If two tills race for the final
         // unit, only one update succeeds; the losing checkout fully rolls back.
@@ -451,6 +504,7 @@ export class CartRepository {
           include: {
             lineItems: true,
             customer: { select: { id: true, name: true, phone: true } },
+            payments: true,
           },
         });
       },

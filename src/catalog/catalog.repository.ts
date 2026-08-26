@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Prisma, Product } from 'generated/prisma/client';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import { Prisma, Product, StockMovementType } from 'generated/prisma/client';
 import { PrismaService } from 'src/globalservices/prisma/prisma.service';
 import { generateInternalEan13 } from './barcode.util';
 
@@ -12,6 +12,10 @@ export interface CreateProductData {
   minMarginPct?: number;
   minPrice?: Prisma.Decimal;
   lowStockThreshold?: number;
+}
+
+export interface ImportProductData extends CreateProductData {
+  quantityAtHand: number;
 }
 
 export interface CreateServiceData {
@@ -69,6 +73,46 @@ export class CatalogRepository {
       this.logger.error(`Failed to create product for shop ${shopId}`);
       throw error;
     }
+  }
+
+  async generateAvailableBarcodes(shopId: string, count: number) {
+    const available = new Set<string>();
+    while (available.size < count) {
+      const candidates = Array.from({ length: count - available.size }, () => generateInternalEan13());
+      const existing = await this.prisma.product.findMany({
+        where: { shopId, barcode: { in: candidates } }, select: { barcode: true },
+      });
+      const taken = new Set(existing.map(({ barcode }) => barcode));
+      candidates.forEach((barcode) => { if (!taken.has(barcode)) available.add(barcode); });
+    }
+    return [...available];
+  }
+
+  async importProductBatch(shopId: string, userId: string, rows: ImportProductData[]) {
+    this.logger.log(`Importing product batch of ${rows.length} into shop ${shopId} by user ${userId}`);
+    const barcodes = rows.map((row) => row.barcode);
+    if (new Set(barcodes).size !== barcodes.length)
+      throw new ConflictException('The generated batch contains duplicate barcodes');
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.product.findFirst({ where: { shopId, barcode: { in: barcodes } }, select: { barcode: true } });
+      if (existing) throw new ConflictException(`Barcode ${existing.barcode} already exists in this shop`);
+
+      const products = [];
+      for (const row of rows) {
+        const { quantityAtHand, ...productData } = row;
+        const product = await tx.product.create({
+          data: { shopId, ...productData, stockCache: { create: { currentQuantity: quantityAtHand } } },
+          include: { stockCache: true },
+        });
+        await tx.stockMovement.create({ data: {
+          productId: product.id, quantityDelta: quantityAtHand, type: StockMovementType.RESTOCK,
+          createdById: userId, note: 'Opening quantity from bulk product import',
+        } });
+        products.push(product);
+      }
+      return products;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async createService(shopId: string, data: CreateServiceData) {

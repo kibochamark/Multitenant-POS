@@ -48,4 +48,33 @@ export class ScheduledJobsRepository {
       lowStock: products.filter((product) => (product.stockCache?.currentQuantity ?? 0) <= product.lowStockThreshold).map((product) => ({ productId: product.id, name: product.name, quantity: product.stockCache?.currentQuantity ?? 0, threshold: product.lowStockThreshold })),
     };
   }
+
+
+  async LowStockProducts (shopId:string){
+    const products = await this.prisma.product.findMany({
+      where:{
+        shopId:shopId
+      },
+      select:{
+        shopId:true,
+        name:true,
+        id:true,
+        price:true,
+        category:true,
+        lowStockThreshold:true,
+        stockCache:{
+          select:{
+            currentQuantity:true
+          }
+        }
+      }
+    })
+    if(!products) throw new Error("prodcuts not available")
+    
+    const lowstock = products.map((p)=>{
+      return p ?? p.stockCache.currentQuantity <= p.lowStockThreshold
+    })
+    
+    return lowstock
+  }
 }

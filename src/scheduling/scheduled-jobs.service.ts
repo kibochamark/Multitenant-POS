@@ -55,4 +55,37 @@ export class ScheduledJobsService {
       }
     }
   }
+
+
+  @Cron('0 0 20 * * *')
+  async sendLowStockSummary (){
+    // console.log("called")
+    const now = new Date();
+    const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Nairobi', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+    for (const company of await this.repository.companies()) {
+      const owner = company.users[0];
+      if (!owner) continue;
+
+      for (const shop of company.shops) {
+        const summary = await this.repository.LowStockProducts(
+          shop.id
+        );
+
+        await this.notifications.createForUser({
+          userId: owner.id,
+          shopId: shop.id,
+          dedupeKey: `lowstock-summary:${shop.id}:${date}`,
+          type: 'LOW_STOCK',
+          message: `${shop.name}: ${summary.length + 1} low-stock products.`,
+          templateName: '',
+          bodyParameters: [
+            shop.name,
+            date
+          ],
+          metadata: {},
+        });
+      }
+    }
+  }
+
 }

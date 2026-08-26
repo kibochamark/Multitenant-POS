@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -10,8 +11,11 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
+  UseInterceptors,
   Version,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { RequireShopAccess } from 'src/guards/require-shop-access.decorator';
 import { AuthenticatedRequest } from 'src/types/authenticated-request.types';
 import { CatalogService } from './catalog.service';
@@ -34,6 +38,32 @@ export class CatalogController {
   private readonly logger = new Logger(CatalogController.name);
 
   constructor(private readonly catalogService: CatalogService) {}
+
+  @Post('products/bulk-upload')
+  @Version('1')
+  @HttpCode(202)
+  @RequireShopAccess('shopId', 'OWNER', 'MANAGER')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  async bulkUpload(
+    @Param('shopId') shopId: string,
+    @Req() request: AuthenticatedRequest,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('Attach a CSV or XLSX file in the file field');
+    const result = await this.catalogService.importProducts(shopId, request.user!.id, file);
+    return { status: 202, data: result, error: null };
+  }
+
+  @Get('products/bulk-upload/:jobId')
+  @Version('1')
+  @RequireShopAccess('shopId', 'OWNER', 'MANAGER')
+  async bulkUploadStatus(
+    @Param('shopId') shopId: string,
+    @Param('jobId') jobId: string,
+  ) {
+    const result = await this.catalogService.productImportStatus(shopId, jobId);
+    return { status: 200, data: result, error: null };
+  }
 
   @Post('products/barcodes/generate')
   @Version('1')
