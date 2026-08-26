@@ -14,6 +14,10 @@ export class ExpensesService {
       amount: new Prisma.Decimal(data.amount),
       category: data.category.trim(),
       description: data.description.trim(),
+      paymentMethod: data.paymentMethod,
+      ...(data.paymentMethod === 'MPESA' && data.mpesaReference?.trim()
+        ? { mpesaReference: data.mpesaReference.trim().toUpperCase() }
+        : { mpesaReference: null }),
     });
   }
 

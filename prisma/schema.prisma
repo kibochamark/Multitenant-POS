@@ -48,9 +48,22 @@ enum StockMovementType {
 
 enum OrderStatus {
   OPEN // cart just converted, awaiting payment
+  PENDING // one or more payment allocations still await confirmation
   PARTIALLY_PAID
   PAID
   CANCELLED
+}
+
+enum OrderRefundStatus {
+  NONE
+  PARTIAL
+  FULL
+}
+
+enum RefundDisposition {
+  RESTOCK
+  DAMAGED
+  NOT_RETURNED
 }
 
 enum CartStatus {
@@ -73,6 +86,7 @@ enum PaymentStatus {
   PENDING
   CONFIRMED
   FAILED
+  CANCELLED
 }
 
 // MANUAL: staff types in a reference code and reconciles it against the Safaricom
@@ -94,6 +108,7 @@ enum MpesaAccountType {
 enum CreditTransactionType {
   CREDIT_SALE
   REPAYMENT
+  REFUND
   ADJUSTMENT
 }
 
@@ -105,7 +120,28 @@ enum NotificationType {
   PAYMENT_PENDING
   CREDIT_LIMIT_EXCEEDED
   CREDIT_OVERDUE
+  DAILY_SUMMARY
   GENERIC
+}
+
+enum NotificationChannel {
+  IN_APP
+  WHATSAPP
+  SMS
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  QUEUED
+  PROCESSING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum NotificationTemplateStatus {
+  ACTIVE
+  INACTIVE
 }
 
 // ─────────────────────────────────────────────────────────
@@ -133,14 +169,14 @@ model Shop {
   id                  String   @id @default(uuid())
   companyId           String
   name                String
-  vatPct              Float    @default(0)
-  defaultMinMarginPct Float    @default(0) // fallback profit floor, overridable per-Product
-  globalDiscountPct   Float    @default(0)
+  vatPct              Float? // null inherits Company.vatPct; zero is an explicit zero-VAT override
+  defaultMinMarginPct Float? // null inherits Company.defaultMinMarginPct
+  globalDiscountPct   Float? // null inherits Company.globalDiscountPct
   metadata            Json? // catch-all for anything shop-specific that doesn't need its own column
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  company       Company        @relation(fields: [companyId], references: [id])
+  company       Company            @relation(fields: [companyId], references: [id])
   products      Product[]
   services      Service[]
   carts         Cart[]
@@ -150,6 +186,7 @@ model Shop {
   userRoles     UserShopRole[]
   notifications Notification[]
   mpesaAccounts MpesaAccount[]
+  dailyAccounts ShopDailyAccount[]
 
   @@index([companyId])
   @@map("shops")
@@ -167,23 +204,33 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   defaultOwner Boolean  @default(false) @map("defaulOwner") // true for the first user created in a company, false for all others
+  isActive     Boolean  @default(true)
 
-  company                  Company             @relation(fields: [companyId], references: [id])
+  company                  Company                     @relation(fields: [companyId], references: [id])
   shopRoles                UserShopRole[]
-  ordersHandled            Order[]             @relation("OrderStaff")
-  cartsHandled             Cart[]              @relation("CartStaff")
-  cartDiscountsApplied     CartItem[]          @relation("CartDiscountAppliedBy")
-  writeOffs                WriteOff[]          @relation("WriteOffStaff")
-  refundsIssued            Refund[]            @relation("RefundStaff")
-  expensesRecorded         Expense[]           @relation("ExpenseRecordedBy")
-  servicesRecorded         Service[]           @relation("ServiceCreatedBy")
+  ordersHandled            Order[]                     @relation("OrderStaff")
+  cartsHandled             Cart[]                      @relation("CartStaff")
+  cartDiscountsApplied     CartItem[]                  @relation("CartDiscountAppliedBy")
+  writeOffs                WriteOff[]                  @relation("WriteOffStaff")
+  refundsIssued            Refund[]                    @relation("RefundStaff")
+  expensesRecorded         Expense[]                   @relation("ExpenseRecordedBy")
+  servicesRecorded         Service[]                   @relation("ServiceCreatedBy")
   stockMovementsRecorded   StockMovement[]
-  paymentsRecorded         Payment[]           @relation("PaymentRecordedBy")
-  paymentsVerified         Payment[]           @relation("PaymentVerifiedBy")
-  discountsApplied         OrderLineItem[]     @relation("DiscountAppliedBy")
-  creditTransactionsLogged CreditTransaction[] @relation("CreditTransactionRecordedBy")
-  creditRepaymentsRecorded CreditRepayment[]   @relation("CreditRepaymentRecordedBy")
-  creditRepaymentsVerified CreditRepayment[]   @relation("CreditRepaymentVerifiedBy")
+  paymentsRecorded         Payment[]                   @relation("PaymentRecordedBy")
+  paymentsVerified         Payment[]                   @relation("PaymentVerifiedBy")
+  discountsApplied         OrderLineItem[]             @relation("DiscountAppliedBy")
+  creditTransactionsLogged CreditTransaction[]         @relation("CreditTransactionRecordedBy")
+  creditRepaymentsRecorded CreditRepayment[]           @relation("CreditRepaymentRecordedBy")
+  creditRepaymentsVerified CreditRepayment[]           @relation("CreditRepaymentVerifiedBy")
+  creditLimitsChanged      CustomerCreditLimitChange[] @relation("CreditLimitChangedBy")
+  ordersCancelled          OrderCancellation[]         @relation("OrderCancelledBy")
+  refundPaymentsRecorded   RefundPayment[]             @relation("RefundPaymentRecordedBy")
+  notificationPreference   NotificationPreference?
+  notificationChannels     UserNotificationChannel[]
+  notificationTemplates    NotificationTemplate[]
+  notificationDeliveries   NotificationDelivery[]
+  notificationRecipients   NotificationRecipient[]
+  dailyAccountsRecorded    ShopDailyAccount[]          @relation("DailyAccountRecordedBy")
 
   @@index([companyId])
   @@map("users")
@@ -300,20 +347,22 @@ model Customer {
   id          String   @id @default(uuid())
   companyId   String
   name        String
-  phone       String
+  phone       String?
   email       String?
-  creditLimit Float? // null = no explicit limit enforced
+  creditLimit Decimal  @default(0) @db.Decimal(12, 2)
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  company            Company             @relation(fields: [companyId], references: [id])
+  company            Company                     @relation(fields: [companyId], references: [id])
   orders             Order[]
   creditAccount      CreditAccountCache?
   creditTransactions CreditTransaction[]
   creditRepayments   CreditRepayment[]
+  creditLimitChanges CustomerCreditLimitChange[]
 
   @@unique([companyId, phone])
+  @@unique([companyId, email])
   @@index([companyId])
   @@map("customers")
 }
@@ -323,12 +372,30 @@ model Customer {
 model CreditAccountCache {
   id             String   @id @default(uuid())
   customerId     String   @unique
-  currentBalance Float    @default(0) // positive = amount the customer owes the shop
+  currentBalance Decimal  @default(0) @db.Decimal(12, 2) // positive = amount the customer owes the shop
   updatedAt      DateTime @updatedAt
 
   customer Customer @relation(fields: [customerId], references: [id])
 
   @@map("credit_account_cache")
+}
+
+// Immutable audit trail for every manager/owner credit-limit decision.
+model CustomerCreditLimitChange {
+  id            String   @id @default(uuid())
+  customerId    String
+  previousLimit Decimal  @db.Decimal(12, 2)
+  newLimit      Decimal  @db.Decimal(12, 2)
+  reason        String
+  changedById   String
+  createdAt     DateTime @default(now())
+
+  customer  Customer @relation(fields: [customerId], references: [id])
+  changedBy User     @relation("CreditLimitChangedBy", fields: [changedById], references: [id])
+
+  @@index([customerId, createdAt])
+  @@index([changedById])
+  @@map("customer_credit_limit_changes")
 }
 
 // Append-only ledger. Never updated or deleted — always insert a new row.
@@ -339,8 +406,9 @@ model CreditTransaction {
   id           String                @id @default(uuid())
   customerId   String
   orderId      String? // set for CREDIT_SALE, null for REPAYMENT/ADJUSTMENT
+  refundId     String?
   type         CreditTransactionType
-  amount       Float // positive increases balance owed, negative decreases it
+  amount       Decimal               @db.Decimal(12, 2) // positive increases balance owed, negative decreases it
   dueDate      DateTime? // optional follow-up date, set on CREDIT_SALE
   note         String?
   recordedById String?
@@ -348,10 +416,12 @@ model CreditTransaction {
 
   customer   Customer @relation(fields: [customerId], references: [id])
   order      Order?   @relation(fields: [orderId], references: [id])
+  refund     Refund?  @relation(fields: [refundId], references: [id])
   recordedBy User?    @relation("CreditTransactionRecordedBy", fields: [recordedById], references: [id])
 
   @@index([customerId])
   @@index([orderId])
+  @@index([refundId])
   @@map("credit_transactions")
 }
 
@@ -365,6 +435,8 @@ model CreditRepayment {
   method        PaymentMethod
   channel       PaymentChannel @default(MANUAL)
   referenceCode String?
+  note          String?
+  failureReason String?
   status        PaymentStatus  @default(PENDING)
   recordedById  String
   verifiedById  String?
@@ -453,17 +525,19 @@ model CartItem {
 // ─────────────────────────────────────────────────────────
 
 model Order {
-  id         String      @id @default(uuid())
-  shopId     String
-  staffId    String
-  customerId String? // required at the service layer whenever any Payment.method = CREDIT
-  status     OrderStatus @default(OPEN)
-  subtotal   Float
-  vatAmount  Float       @default(0)
-  total      Float
-  amountPaid Float       @default(0) // sum of CONFIRMED payments, kept in sync on payment writes
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  id             String            @id @default(uuid())
+  shopId         String
+  staffId        String
+  customerId     String? // required at the service layer whenever any Payment.method = CREDIT
+  status         OrderStatus       @default(OPEN)
+  subtotal       Decimal           @db.Decimal(12, 2)
+  vatAmount      Decimal           @default(0) @db.Decimal(12, 2)
+  total          Decimal           @db.Decimal(12, 2)
+  amountPaid     Decimal           @default(0) @db.Decimal(12, 2) // sum of CONFIRMED payments, kept in sync on payment writes
+  refundedAmount Decimal           @default(0) @db.Decimal(12, 2)
+  refundStatus   OrderRefundStatus @default(NONE)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 
   shop               Shop                @relation(fields: [shopId], references: [id])
   staff              User                @relation("OrderStaff", fields: [staffId], references: [id])
@@ -473,10 +547,27 @@ model Order {
   payments           Payment[]
   refunds            Refund[]
   creditTransactions CreditTransaction[]
+  cancellation       OrderCancellation?
 
   @@index([shopId, status])
   @@index([customerId])
   @@map("orders")
+}
+
+// Immutable audit record for reversing an unpaid checked-out order. The
+// one-to-one orderId constraint makes cancellation idempotent.
+model OrderCancellation {
+  id            String   @id @default(uuid())
+  orderId       String   @unique
+  reason        String
+  cancelledById String
+  createdAt     DateTime @default(now())
+
+  order       Order @relation(fields: [orderId], references: [id])
+  cancelledBy User  @relation("OrderCancelledBy", fields: [cancelledById], references: [id])
+
+  @@index([cancelledById])
+  @@map("order_cancellations")
 }
 
 model OrderLineItem {
@@ -485,11 +576,11 @@ model OrderLineItem {
   itemType            ItemType
   itemId              String // Product.id or Service.id depending on itemType
   quantity            Int
-  originalUnitPrice   Float // snapshot of tag price at time of sale
+  originalUnitPrice   Decimal       @db.Decimal(12, 2) // snapshot of tag price at time of sale
   discountType        DiscountType?
-  discountValue       Float?
-  finalUnitPrice      Float
-  lineTotal           Float
+  discountValue       Decimal?      @db.Decimal(12, 2)
+  finalUnitPrice      Decimal       @db.Decimal(12, 2)
+  lineTotal           Decimal       @db.Decimal(12, 2)
   belowFloor          Boolean       @default(false) // true if finalUnitPrice < computed profit floor
   discountReason      String?
   discountAppliedById String?
@@ -512,7 +603,7 @@ model Payment {
   orderId       String
   method        PaymentMethod
   channel       PaymentChannel @default(MANUAL)
-  amount        Float
+  amount        Decimal        @db.Decimal(12, 2)
   status        PaymentStatus  @default(PENDING)
   referenceCode String? // MANUAL: code the customer reads out from their M-Pesa SMS
 
@@ -526,8 +617,9 @@ model Payment {
   stkResultCode        String?
   stkResultDesc        String?
 
-  confirmedAt DateTime? // set the moment status becomes CONFIRMED, regardless of channel
-  createdAt   DateTime  @default(now())
+  confirmedAt   DateTime? // set the moment status becomes CONFIRMED, regardless of channel
+  failureReason String?
+  createdAt     DateTime  @default(now())
 
   order      Order @relation(fields: [orderId], references: [id])
   recordedBy User  @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
@@ -548,12 +640,14 @@ model Refund {
   orderId     String
   staffId     String
   reason      String
-  totalAmount Float
+  totalAmount Decimal  @db.Decimal(12, 2)
   createdAt   DateTime @default(now())
 
-  order     Order            @relation(fields: [orderId], references: [id])
-  staff     User             @relation("RefundStaff", fields: [staffId], references: [id])
-  lineItems RefundLineItem[]
+  order              Order               @relation(fields: [orderId], references: [id])
+  staff              User                @relation("RefundStaff", fields: [staffId], references: [id])
+  lineItems          RefundLineItem[]
+  payments           RefundPayment[]
+  creditTransactions CreditTransaction[]
 
   @@index([orderId])
   @@map("refunds")
@@ -561,17 +655,41 @@ model Refund {
 
 // Supports partial refunds — refunding some line items/quantities but not others.
 model RefundLineItem {
-  id              String @id @default(uuid())
+  id              String            @id @default(uuid())
   refundId        String
   orderLineItemId String
   quantity        Int
-  amount          Float
+  amount          Decimal           @db.Decimal(12, 2)
+  disposition     RefundDisposition
 
   refund        Refund        @relation(fields: [refundId], references: [id])
   orderLineItem OrderLineItem @relation(fields: [orderLineItemId], references: [id])
 
   @@index([refundId])
   @@map("refund_line_items")
+}
+
+// Money leaving Dantech after a paid sale is separate from the original
+// incoming Payment. Credit reversals use CreditTransaction(type: REFUND).
+model RefundPayment {
+  id            String        @id @default(uuid())
+  refundId      String
+  method        PaymentMethod
+  amount        Decimal       @db.Decimal(12, 2)
+  status        PaymentStatus
+  referenceCode String?
+  recordedById  String
+  confirmedAt   DateTime?
+  failureReason String?
+  createdAt     DateTime      @default(now())
+
+  refund     Refund @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  recordedBy User   @relation("RefundPaymentRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([refundId])
+  @@index([method, status, createdAt])
+  @@index([referenceCode])
+  @@map("refund_payments")
 }
 
 // Stock leaving inventory outside of a sale (damaged, expired, lost, theft).
@@ -600,13 +718,15 @@ model WriteOff {
 // ─────────────────────────────────────────────────────────
 
 model Expense {
-  id           String   @id @default(uuid())
-  shopId       String
-  recordedById String // who
-  amount       Decimal  @db.Decimal(12, 2) // how much
-  category     String // e.g. "Rent", "Utilities", "Supplier restock", "Repairs"
-  description  String // why
-  createdAt    DateTime @default(now())
+  id             String        @id @default(uuid())
+  shopId         String
+  recordedById   String // who
+  amount         Decimal       @db.Decimal(12, 2) // how much
+  category       String // e.g. "Rent", "Utilities", "Supplier restock", "Repairs"
+  description    String // why
+  paymentMethod  PaymentMethod @default(CASH)
+  mpesaReference String?
+  createdAt      DateTime      @default(now())
 
   shop       Shop @relation(fields: [shopId], references: [id])
   recordedBy User @relation("ExpenseRecordedBy", fields: [recordedById], references: [id])
@@ -614,7 +734,27 @@ model Expense {
   @@index([shopId])
   @@index([shopId, createdAt, id])
   @@index([category])
+  @@index([shopId, paymentMethod, createdAt])
   @@map("expenses")
+}
+
+// One opening balance per shop and business day. Everything else in the
+// accounts view is derived from immutable orders, payments, credit, and expenses.
+model ShopDailyAccount {
+  id           String   @id @default(uuid())
+  shopId       String
+  businessDate DateTime @db.Date
+  openingCash  Decimal  @default(0) @db.Decimal(12, 2)
+  recordedById String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shop       Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  recordedBy User @relation("DailyAccountRecordedBy", fields: [recordedById], references: [id])
+
+  @@unique([shopId, businessDate])
+  @@index([shopId, businessDate])
+  @@map("shop_daily_accounts")
 }
 
 // ─────────────────────────────────────────────────────────
@@ -623,6 +763,7 @@ model Expense {
 
 model Notification {
   id        String           @id @default(uuid())
+  dedupeKey String?
   shopId    String?
   type      NotificationType
   message   String
@@ -630,8 +771,115 @@ model Notification {
   metadata  Json? // e.g. { orderLineItemId, discountPct } for a BELOW_FLOOR_DISCOUNT alert
   createdAt DateTime         @default(now())
 
-  shop Shop? @relation(fields: [shopId], references: [id])
+  shop       Shop?                   @relation(fields: [shopId], references: [id])
+  deliveries NotificationDelivery[]
+  recipients NotificationRecipient[]
 
   @@index([shopId, isRead])
+  @@index([dedupeKey])
   @@map("notifications")
+}
+
+// In-app read state belongs to a recipient, not to the shared notification.
+// This prevents one owner reading an alert on behalf of every other owner.
+model NotificationRecipient {
+  id             String    @id @default(uuid())
+  notificationId String
+  userId         String
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, readAt, createdAt])
+  @@map("notification_recipients")
+}
+
+// One row controls the authenticated user's delivery channels. Event-specific
+// switches can be added later without changing the delivery/outbox design.
+model NotificationPreference {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  enabled         Boolean   @default(true)
+  inAppEnabled    Boolean   @default(true)
+  whatsappEnabled Boolean   @default(false)
+  smsEnabled      Boolean   @default(false)
+  whatsappOptInAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+// Durable outbox and audit record. BullMQ jobs carry only this row's ID, so
+// phone numbers and message contents are not copied into Redis.
+model NotificationDelivery {
+  id                String                     @id @default(uuid())
+  notificationId    String
+  userId            String
+  channel           NotificationChannel
+  destination       String?
+  status            NotificationDeliveryStatus @default(PENDING)
+  providerMessageId String?
+  attempts          Int                        @default(0)
+  lastError         String?
+  queuedAt          DateTime?
+  sentAt            DateTime?
+  failedAt          DateTime?
+  scheduledFor      DateTime?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId, channel])
+  @@index([status, scheduledFor, createdAt])
+  @@index([userId, createdAt])
+  @@map("notification_deliveries")
+}
+
+// Channel ownership belongs to the user. Provider secrets are stored only as
+// authenticated ciphertext and are never returned by the API.
+model UserNotificationChannel {
+  id                    String                      @id @default(uuid())
+  userId                String
+  channel               NotificationChannel
+  enabled               Boolean                     @default(false)
+  destination           String?
+  credentialsCiphertext String?
+  configuration         Json?
+  lastTestedAt          DateTime?
+  lastTestStatus        NotificationDeliveryStatus?
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channel])
+  @@index([userId, enabled])
+  @@map("user_notification_channels")
+}
+
+model NotificationTemplate {
+  id                   String                     @id @default(uuid())
+  userId               String
+  name                 String
+  channel              NotificationChannel
+  providerTemplateName String?
+  languageCode         String                     @default("en")
+  message              String
+  status               NotificationTemplateStatus @default(ACTIVE)
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name, channel])
+  @@index([userId, status])
+  @@map("notification_templates")
 }

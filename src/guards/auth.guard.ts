@@ -69,6 +69,10 @@ export class AuthGuard implements CanActivate {
         throw new UnauthorizedException('User is not registered');
       }
 
+      if (!user.isActive) {
+        throw new UnauthorizedException('Your Dantech account is inactive');
+      }
+
       request.user = {
         id: user.id,
         kindeId: user.kindeId,

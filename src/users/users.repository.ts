@@ -54,6 +54,14 @@ export class UsersRepository {
             },
           },
         },
+        notificationPreference: {
+          select: {
+            inAppEnabled: true,
+            whatsappEnabled: true,
+            smsEnabled: true,
+            whatsappOptInAt: true,
+          },
+        },
       },
     });
 
@@ -80,6 +88,12 @@ export class UsersRepository {
         name: user.company.name,
       },
       shops,
+        notificationPreference: {
+            inAppEnabled: user.notificationPreference?.inAppEnabled ?? false,
+            whatsappEnabled: user.notificationPreference?.whatsappEnabled ?? false,
+            smsEnabled: user.notificationPreference?.smsEnabled ?? false,
+            whatsappOptInAt: user.notificationPreference?.whatsappOptInAt ?? null,
+        },
     };
   }
 

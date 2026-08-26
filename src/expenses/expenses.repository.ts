@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from 'generated/prisma/client';
+import { PaymentMethod, Prisma } from 'generated/prisma/client';
 import { PrismaService } from 'src/globalservices/prisma/prisma.service';
 
 const expenseInclude = {
@@ -14,11 +14,11 @@ export class ExpensesRepository {
   create(
     shopId: string,
     recordedById: string,
-    data: { amount: Prisma.Decimal; category: string; description: string },
+    data: { amount: Prisma.Decimal; category: string; description: string; paymentMethod: 'CASH' | 'MPESA'; mpesaReference?: string | null },
   ) {
     this.logger.log(`Recording expense for shop ${shopId}`);
     return this.prisma.expense.create({
-      data: { shopId, recordedById, ...data },
+      data: { shopId, recordedById, ...data, paymentMethod: data.paymentMethod as PaymentMethod },
       include: expenseInclude,
     });
   }

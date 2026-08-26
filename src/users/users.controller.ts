@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  GoneException,
   HttpCode,
   HttpException,
   NotFoundException,
@@ -22,6 +23,10 @@ import { AuthenticatedRequest } from 'src/types/authenticated-request.types';
 @UseGuards(AuthGuard)
 export class UsersController {
   constructor(private readonly userservice: UsersService) {}
+
+  private legacyEndpoint(): never {
+    throw new GoneException('This unscoped endpoint has been retired. Use the company-scoped administration API.');
+  }
 
   @Get('me')
   @Version('1')
@@ -77,6 +82,7 @@ export class UsersController {
     @Param('skip') skip?: number,
     @Param('take') take?: number,
   ) {
+    this.legacyEndpoint();
     try {
       const users = await this.userservice.findallusers(skip, take);
       if (users.status === 200) {
@@ -96,6 +102,7 @@ export class UsersController {
   @Get('all/:id')
   @Version('1')
   async findUserById(@Param('id') id: string) {
+    this.legacyEndpoint();
     try {
       const user = await this.userservice.finduserbyid(id);
       if (user.status === 200) {
@@ -120,6 +127,7 @@ export class UsersController {
     @Param('skip') skip?: number,
     @Param('take') take?: number,
   ) {
+    this.legacyEndpoint();
     try {
       const users = await this.userservice.findusersbycompanyid(
         companyId,
@@ -147,6 +155,7 @@ export class UsersController {
     @Param('id') id: string,
     @Body() updateUserDTO: Partial<CreateUserDTO>,
   ) {
+    this.legacyEndpoint();
     try {
       const updateduser = await this.userservice.updateuser(id, updateUserDTO);
       if (updateduser.status === 200) {
@@ -167,6 +176,7 @@ export class UsersController {
   @Post('shop-role')
   @Version('1')
   async createUserShopRole(@Body() data: UserShopRoleDTO) {
+    this.legacyEndpoint();
     try {
       const createdRole = await this.userservice.createusershoprole(data);
       if (createdRole.status === 201) {
@@ -189,6 +199,7 @@ export class UsersController {
     @Param('userId') userId: string,
     @Param('shopId') shopId: string,
   ) {
+    this.legacyEndpoint();
     try {
       const role = await this.userservice.findusershoprolebycompositeid(
         userId,
@@ -215,6 +226,7 @@ export class UsersController {
     @Param('shopId') shopId: string,
     @Body() data: Partial<UserShopRoleDTO>,
   ) {
+    this.legacyEndpoint();
     try {
       const updatedRole =
         await this.userservice.updateusershoprolebycompositeid(
@@ -243,6 +255,7 @@ export class UsersController {
     @Param('userId') userId: string,
     @Param('shopId') shopId: string,
   ) {
+    this.legacyEndpoint();
     try {
       const deletedRole = await this.userservice.deleteusershoprole(
         userId,

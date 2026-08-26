@@ -7,6 +7,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -26,6 +27,14 @@ export class CreateExpenseDto {
   @MinLength(2)
   @MaxLength(500)
   description: string;
+
+  @IsIn(['CASH', 'MPESA'])
+  paymentMethod: 'CASH' | 'MPESA';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  mpesaReference?: string;
 }
 
 export class ExpenseListQueryDto {
