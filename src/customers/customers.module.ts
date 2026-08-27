@@ -7,8 +7,10 @@ import { CustomersService } from './customers.service';
 import { CreditRepaymentsController } from './credit-repayments.controller';
 import { CreditRepaymentsService } from './credit-repayments.service';
 import { CreditRepaymentsRepository } from './credit-repayments.repository';
+import { AccountingModule } from 'src/accounting/accounting.module';
 
 @Module({
+  imports: [AccountingModule],
   controllers: [CustomersController, CreditRepaymentsController],
   providers: [
     CustomersService,

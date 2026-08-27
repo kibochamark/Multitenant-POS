@@ -4,8 +4,10 @@ import { ShopAccessGuard } from 'src/guards/shop-access.guard';
 import { ExpensesController } from './expenses.controller';
 import { ExpensesRepository } from './expenses.repository';
 import { ExpensesService } from './expenses.service';
+import { AccountingModule } from 'src/accounting/accounting.module';
 
 @Module({
+  imports: [AccountingModule],
   controllers: [ExpensesController],
   providers: [ExpensesService, ExpensesRepository, AuthGuard, ShopAccessGuard],
 })

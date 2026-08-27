@@ -42,7 +42,13 @@ describe('CartRepository', () => {
   const prisma = {
     $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
   };
-  const repository = new CartRepository(prisma as never);
+  const initializeInTransaction = jest.fn();
+  const postJournal = jest.fn();
+  const repository = new CartRepository(
+    prisma as never,
+    { initializeInTransaction } as never,
+    { post: postJournal } as never,
+  );
 
   beforeEach(() => {
     jest.clearAllMocks();

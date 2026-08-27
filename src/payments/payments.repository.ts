@@ -1,5 +1,7 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { CreditTransactionType, OrderStatus, PaymentChannel, PaymentMethod, PaymentStatus, Prisma } from 'generated/prisma/client';
+import { AccountPurpose, AccountingEventType, AccountingSourceType, CreditTransactionType, JournalSide, OrderStatus, PaymentChannel, PaymentMethod, PaymentStatus, Prisma } from 'generated/prisma/client';
+import { AccountSeederService } from 'src/accounting/account-seeder.service';
+import { AccountingPostingService } from 'src/accounting/accounting-posting.service';
 import { PrismaService } from 'src/globalservices/prisma/prisma.service';
 
 const orderResultInclude = {
@@ -17,7 +19,11 @@ const orderResultInclude = {
 @Injectable()
 export class PaymentsRepository {
   private readonly logger = new Logger(PaymentsRepository.name);
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly accountSeeder: AccountSeederService,
+    private readonly accounting: AccountingPostingService,
+  ) {}
 
   getOrder(shopId: string, orderId: string) {
     this.logger.log(`Getting order ${orderId} in shop ${shopId}`);
@@ -46,6 +52,7 @@ export class PaymentsRepository {
           confirmedAt: new Date(),
         },
       });
+      await this.postConfirmedPayment(tx, shopId, userId, payment);
       const updatedOrder = await this.addConfirmedAmount(tx, order, amount);
       return { payment, order: updatedOrder };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -86,6 +93,7 @@ export class PaymentsRepository {
           confirmedAt: new Date(),
         },
       });
+      await this.postConfirmedPayment(tx, shopId, userId, payment);
       const updatedOrder = await this.refreshOrderPaymentState(tx, orderId);
       return {
         payment,
@@ -128,6 +136,7 @@ export class PaymentsRepository {
           ...(result === 'CONFIRMED' ? { confirmedAt: now, failureReason: null } : { failureReason: reason?.trim() || 'Reference could not be verified' }),
         },
       });
+      if (result === 'CONFIRMED') await this.postConfirmedPayment(tx, shopId, verifierId, updatedPayment);
       await this.refreshOrderPaymentState(tx, orderId);
       return {
         payment: updatedPayment,
@@ -194,6 +203,31 @@ export class PaymentsRepository {
         order: await tx.order.findUniqueOrThrow({ where: { id: orderId }, include: orderResultInclude }),
       };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  private async postConfirmedPayment(
+    tx: Prisma.TransactionClient,
+    shopId: string,
+    recordedById: string,
+    payment: { id: string; method: PaymentMethod; amount: Prisma.Decimal; confirmedAt: Date | null },
+  ) {
+    if (payment.method === PaymentMethod.CREDIT) return;
+    const shop = await tx.shop.findUniqueOrThrow({ where: { id: shopId }, select: { companyId: true } });
+    await this.accountSeeder.initializeInTransaction(tx, shop.companyId, shopId);
+    const receivedIn = payment.method === PaymentMethod.CASH ? AccountPurpose.CASH_ON_HAND : AccountPurpose.MPESA;
+    await this.accounting.post(tx, {
+      companyId: shop.companyId,
+      shopId,
+      recordedById,
+      eventType: payment.method === PaymentMethod.CASH ? AccountingEventType.CASH_SALE : AccountingEventType.MPESA_SALE,
+      transactionDate: payment.confirmedAt ?? new Date(),
+      description: `${payment.method} settlement received`,
+      source: { type: AccountingSourceType.PAYMENT, id: payment.id },
+      lines: [
+        { purpose: receivedIn, side: JournalSide.DEBIT, amount: payment.amount },
+        { purpose: AccountPurpose.CUSTOMER_RECEIVABLE, side: JournalSide.CREDIT, amount: payment.amount },
+      ],
+    });
   }
 
   private async loadPayableOrder(tx: Prisma.TransactionClient, shopId: string, orderId: string) {

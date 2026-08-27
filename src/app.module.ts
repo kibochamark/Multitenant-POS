@@ -23,6 +23,7 @@ import { SchedulingModule } from './scheduling/scheduling.module';
 import { AdministrationModule } from './administration/administration.module';
 import { AccountsModule } from './accounts/accounts.module';
 import { RefundsModule } from './refunds/refunds.module';
+import { AccountingModule } from './accounting/accounting.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { RefundsModule } from './refunds/refunds.module';
     AdministrationModule,
     AccountsModule,
     RefundsModule,
+    AccountingModule,
   ],
   controllers: [],
 })

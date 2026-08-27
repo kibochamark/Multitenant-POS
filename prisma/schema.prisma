@@ -144,6 +144,89 @@ enum NotificationTemplateStatus {
   INACTIVE
 }
 
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum AccountScope {
+  COMPANY
+  SHOP
+  CUSTOMER
+}
+
+// AccountType explains the accounting category; AccountPurpose identifies the
+// exact operational account that application workflows must post against.
+enum AccountPurpose {
+  CASH_ON_HAND
+  MPESA
+  BANK
+  CUSTOMER_RECEIVABLE
+  INVENTORY
+  VAT_PAYABLE
+  OWNER_CAPITAL
+  OWNER_DRAWINGS
+  PRODUCT_REVENUE
+  SERVICE_REVENUE
+  SALES_RETURNS
+  COST_OF_GOODS_SOLD
+  GENERAL_EXPENSE
+  CASH_OVER_SHORT
+  UNALLOCATED_INVENTORY_COST
+}
+
+enum AccountingPeriodStatus {
+  OPEN
+  CLOSED
+  LOCKED
+}
+
+enum JournalEntryStatus {
+  DRAFT
+  POSTED
+  REVERSED
+}
+
+enum JournalSide {
+  DEBIT
+  CREDIT
+}
+
+enum AccountingEventType {
+  OPENING_BALANCE
+  SALE
+  CASH_SALE
+  MPESA_SALE
+  CREDIT_SALE
+  SERVICE_SALE
+  CUSTOMER_REPAYMENT
+  EXPENSE
+  INVENTORY_PURCHASE
+  REFUND
+  WRITE_OFF
+  STOCK_ADJUSTMENT
+  ORDER_CANCELLATION
+  MANUAL_ADJUSTMENT
+}
+
+enum AccountingSourceType {
+  ORDER
+  ORDER_CANCELLATION
+  PAYMENT
+  CREDIT_TRANSACTION
+  CREDIT_REPAYMENT
+  EXPENSE
+  REFUND
+  REFUND_PAYMENT
+  STOCK_MOVEMENT
+  INVENTORY_PURCHASE
+  MANUAL_JOURNAL
+  SHOP_DAILY_ACCOUNT
+}
+
 // ─────────────────────────────────────────────────────────
 // TENANCY: COMPANY → SHOP → STAFF
 // ─────────────────────────────────────────────────────────
@@ -158,9 +241,12 @@ model Company {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  shops     Shop[]
-  users     User[]
-  customers Customer[]
+  shops             Shop[]
+  users             User[]
+  customers         Customer[]
+  accounts          Account[]
+  accountingPeriods AccountingPeriod[]
+  journalEntries    JournalEntry[]
 
   @@map("companies")
 }
@@ -176,17 +262,19 @@ model Shop {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  company       Company            @relation(fields: [companyId], references: [id])
-  products      Product[]
-  services      Service[]
-  carts         Cart[]
-  orders        Order[]
-  expenses      Expense[]
-  writeOffs     WriteOff[]
-  userRoles     UserShopRole[]
-  notifications Notification[]
-  mpesaAccounts MpesaAccount[]
-  dailyAccounts ShopDailyAccount[]
+  company        Company            @relation(fields: [companyId], references: [id])
+  products       Product[]
+  services       Service[]
+  carts          Cart[]
+  orders         Order[]
+  expenses       Expense[]
+  writeOffs      WriteOff[]
+  userRoles      UserShopRole[]
+  notifications  Notification[]
+  mpesaAccounts  MpesaAccount[]
+  dailyAccounts  ShopDailyAccount[]
+  accounts       Account[]
+  journalEntries JournalEntry[]
 
   @@index([companyId])
   @@map("shops")
@@ -231,6 +319,8 @@ model User {
   notificationDeliveries   NotificationDelivery[]
   notificationRecipients   NotificationRecipient[]
   dailyAccountsRecorded    ShopDailyAccount[]          @relation("DailyAccountRecordedBy")
+  journalEntriesRecorded   JournalEntry[]              @relation("JournalEntryRecordedBy")
+  accountingPeriodsClosed  AccountingPeriod[]          @relation("AccountingPeriodClosedBy")
 
   @@index([companyId])
   @@map("users")
@@ -360,6 +450,7 @@ model Customer {
   creditTransactions CreditTransaction[]
   creditRepayments   CreditRepayment[]
   creditLimitChanges CustomerCreditLimitChange[]
+  accounts           Account[]
 
   @@unique([companyId, phone])
   @@unique([companyId, email])
@@ -755,6 +846,177 @@ model ShopDailyAccount {
   @@unique([shopId, businessDate])
   @@index([shopId, businessDate])
   @@map("shop_daily_accounts")
+}
+
+// ─────────────────────────────────────────────────────────
+// ACCOUNTING LEDGER & BALANCE CACHES
+// ─────────────────────────────────────────────────────────
+
+// A labelled financial bucket. Parent accounts group reporting categories;
+// journal entries should normally post only to leaf accounts.
+model Account {
+  id          String          @id @default(uuid())
+  companyId   String
+  shopId      String?
+  customerId  String?
+  code        String
+  name        String
+  type        AccountType
+  scope       AccountScope
+  purpose     AccountPurpose?
+  parentId    String?
+  description String?
+  isSystem    Boolean         @default(false)
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  company       Company               @relation(fields: [companyId], references: [id])
+  shop          Shop?                 @relation(fields: [shopId], references: [id])
+  customer      Customer?             @relation(fields: [customerId], references: [id])
+  parent        Account?              @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children      Account[]             @relation("AccountHierarchy")
+  journalLines  JournalLine[]
+  balanceCache  AccountBalanceCache?
+  dailyBalances AccountDailyBalance[]
+
+  @@unique([companyId, code])
+  @@unique([shopId, purpose])
+  @@index([companyId, type, isActive])
+  @@index([shopId])
+  @@index([customerId])
+  @@index([parentId])
+  @@map("accounts")
+}
+
+// A company accounting window. Closed/locked periods prevent historical
+// transactions from being silently changed after reporting.
+model AccountingPeriod {
+  id         String                 @id @default(uuid())
+  companyId  String
+  name       String
+  startsAt   DateTime               @db.Date
+  endsAt     DateTime               @db.Date
+  status     AccountingPeriodStatus @default(OPEN)
+  closedById String?
+  closedAt   DateTime?
+  createdAt  DateTime               @default(now())
+  updatedAt  DateTime               @updatedAt
+
+  company  Company        @relation(fields: [companyId], references: [id])
+  closedBy User?          @relation("AccountingPeriodClosedBy", fields: [closedById], references: [id])
+  entries  JournalEntry[]
+
+  @@unique([companyId, startsAt, endsAt])
+  @@index([companyId, status])
+  @@map("accounting_periods")
+}
+
+// One complete business event. POSTED entries must have equal debit and credit
+// totals; reversals create another entry rather than mutating history.
+model JournalEntry {
+  id              String              @id @default(uuid())
+  companyId       String
+  shopId          String?
+  periodId        String?
+  entryNumber     String
+  eventType       AccountingEventType
+  transactionDate DateTime
+  description     String
+  status          JournalEntryStatus  @default(DRAFT)
+  recordedById    String
+  postedAt        DateTime?
+  reversedAt      DateTime?
+  reversalOfId    String?             @unique
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  company     Company               @relation(fields: [companyId], references: [id])
+  shop        Shop?                 @relation(fields: [shopId], references: [id])
+  period      AccountingPeriod?     @relation(fields: [periodId], references: [id])
+  recordedBy  User                  @relation("JournalEntryRecordedBy", fields: [recordedById], references: [id])
+  reversalOf  JournalEntry?         @relation("JournalReversal", fields: [reversalOfId], references: [id])
+  reversal    JournalEntry?         @relation("JournalReversal")
+  lines       JournalLine[]
+  sourceLinks AccountingEventLink[]
+
+  @@unique([companyId, entryNumber])
+  @@index([companyId, transactionDate])
+  @@index([shopId, transactionDate])
+  @@index([periodId, status])
+  @@index([eventType])
+  @@map("journal_entries")
+}
+
+// One debit or credit side of a journal entry. A single side column prevents a
+// malformed line from containing both debit and credit amounts.
+model JournalLine {
+  id          String      @id @default(uuid())
+  entryId     String
+  accountId   String
+  side        JournalSide
+  amount      Decimal     @db.Decimal(16, 2)
+  description String?
+  createdAt   DateTime    @default(now())
+
+  entry   JournalEntry @relation(fields: [entryId], references: [id])
+  account Account      @relation(fields: [accountId], references: [id])
+
+  @@index([entryId])
+  @@index([accountId])
+  @@map("journal_lines")
+}
+
+// Connects the generic ledger to an order/payment/expense/etc. The unique
+// source prevents the same business event from being posted twice.
+model AccountingEventLink {
+  id         String               @id @default(uuid())
+  entryId    String
+  sourceType AccountingSourceType
+  sourceId   String
+  createdAt  DateTime             @default(now())
+
+  entry JournalEntry @relation(fields: [entryId], references: [id])
+
+  @@unique([sourceType, sourceId])
+  @@index([entryId])
+  @@map("accounting_event_links")
+}
+
+// Fast current balance. `balance` always uses the universal signed formula:
+// totalDebit - totalCredit. JournalLine remains the source of truth.
+model AccountBalanceCache {
+  id          String   @id @default(uuid())
+  accountId   String   @unique
+  totalDebit  Decimal  @default(0) @db.Decimal(16, 2)
+  totalCredit Decimal  @default(0) @db.Decimal(16, 2)
+  balance     Decimal  @default(0) @db.Decimal(16, 2)
+  lastEntryId String?
+  updatedAt   DateTime @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id])
+
+  @@index([lastEntryId])
+  @@map("account_balance_caches")
+}
+
+// Historical daily movement cache used for opening/closing balances and date
+// range reports. It can be rebuilt from POSTED journal lines.
+model AccountDailyBalance {
+  id             String   @id @default(uuid())
+  accountId      String
+  businessDate   DateTime @db.Date
+  openingBalance Decimal  @default(0) @db.Decimal(16, 2)
+  debitMovement  Decimal  @default(0) @db.Decimal(16, 2)
+  creditMovement Decimal  @default(0) @db.Decimal(16, 2)
+  closingBalance Decimal  @default(0) @db.Decimal(16, 2)
+  updatedAt      DateTime @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id])
+
+  @@unique([accountId, businessDate])
+  @@index([businessDate])
+  @@map("account_daily_balances")
 }
 
 // ─────────────────────────────────────────────────────────

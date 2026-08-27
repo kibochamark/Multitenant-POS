@@ -1,5 +1,7 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
-import { CreditTransactionType, PaymentChannel, PaymentMethod, PaymentStatus, Prisma } from 'generated/prisma/client';
+import { AccountPurpose, AccountingEventType, AccountingSourceType, CreditTransactionType, JournalSide, PaymentChannel, PaymentMethod, PaymentStatus, Prisma } from 'generated/prisma/client';
+import { AccountSeederService } from 'src/accounting/account-seeder.service';
+import { AccountingPostingService } from 'src/accounting/accounting-posting.service';
 import { PrismaService } from 'src/globalservices/prisma/prisma.service';
 
 const repaymentInclude = { recordedBy: { select: { id: true, name: true } }, verifiedBy: { select: { id: true, name: true } } } satisfies Prisma.CreditRepaymentInclude;
@@ -7,24 +9,25 @@ const repaymentInclude = { recordedBy: { select: { id: true, name: true } }, ver
 @Injectable()
 export class CreditRepaymentsRepository {
   private readonly logger = new Logger(CreditRepaymentsRepository.name);
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly accountSeeder: AccountSeederService, private readonly accounting: AccountingPostingService) {}
 
   account(companyId: string, customerId: string) {
     return this.prisma.customer.findFirst({ where: { id: customerId, companyId }, select: { id: true, name: true, creditLimit: true, creditAccount: true, creditTransactions: { orderBy: { createdAt: 'desc' }, take: 100, include: { recordedBy: { select: { id: true, name: true } }, order: { select: { id: true, total: true, createdAt: true } } } }, creditRepayments: { orderBy: { createdAt: 'desc' }, take: 100, include: repaymentInclude } } });
   }
 
-  recordCash(companyId: string, customerId: string, userId: string, amount: Prisma.Decimal, note?: string) {
+  recordCash(companyId: string, shopId: string, customerId: string, userId: string, amount: Prisma.Decimal, note?: string) {
     this.logger.log(`Recording cash credit repayment for customer ${customerId}`);
     return this.prisma.$transaction(async (tx) => {
       const customer = await this.loadAccount(tx, companyId, customerId);
       await this.assertAvailable(tx, customerId, customer.creditAccount?.currentBalance ?? new Prisma.Decimal(0), amount);
       const repayment = await tx.creditRepayment.create({ data: { customerId, amount: amount.toNumber(), method: PaymentMethod.CASH, channel: PaymentChannel.MANUAL, status: PaymentStatus.CONFIRMED, recordedById: userId, confirmedAt: new Date(), note }, include: repaymentInclude });
       await this.applyConfirmed(tx, customerId, userId, amount, note ?? `Cash repayment ${repayment.id}`);
+      await this.postRepayment(tx, companyId, shopId, userId, repayment.id, PaymentMethod.CASH, amount, repayment.confirmedAt);
       return repayment;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
-  recordMpesa(companyId: string, customerId: string, userId: string, amount: Prisma.Decimal, referenceCode: string, note?: string) {
+  recordMpesa(companyId: string, shopId: string, customerId: string, userId: string, amount: Prisma.Decimal, referenceCode: string, note?: string) {
     this.logger.log(`Recording pending M-Pesa credit repayment for customer ${customerId}`);
     return this.prisma.$transaction(async (tx) => {
       const customer = await this.loadAccount(tx, companyId, customerId);
@@ -38,7 +41,7 @@ export class CreditRepaymentsRepository {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
-  verify(companyId: string, customerId: string, repaymentId: string, verifierId: string, result: 'CONFIRMED' | 'FAILED', reason?: string) {
+  verify(companyId: string, shopId: string, customerId: string, repaymentId: string, verifierId: string, result: 'CONFIRMED' | 'FAILED', reason?: string) {
     this.logger.log(`Verifying credit repayment ${repaymentId}`);
     return this.prisma.$transaction(async (tx) => {
       const repayment = await tx.creditRepayment.findFirst({ where: { id: repaymentId, customerId, customer: { companyId }, method: PaymentMethod.MPESA, status: PaymentStatus.PENDING } });
@@ -50,6 +53,7 @@ export class CreditRepaymentsRepository {
       if (!account || amount.greaterThan(account.currentBalance)) throw new ConflictException('Repayment exceeds the current customer balance');
       const updated = await tx.creditRepayment.update({ where: { id: repayment.id }, data: { status: PaymentStatus.CONFIRMED, verifiedById: verifierId, verifiedAt: now, confirmedAt: now, failureReason: null }, include: repaymentInclude });
       await this.applyConfirmed(tx, customerId, repayment.recordedById, amount, reason ?? `M-Pesa repayment ${repayment.referenceCode}`);
+      await this.postRepayment(tx, companyId, shopId, verifierId, repayment.id, PaymentMethod.MPESA, amount, now);
       return updated;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
@@ -67,5 +71,18 @@ export class CreditRepaymentsRepository {
   private async applyConfirmed(tx: Prisma.TransactionClient, customerId: string, recordedById: string, amount: Prisma.Decimal, note: string) {
     await tx.creditTransaction.create({ data: { customerId, type: CreditTransactionType.REPAYMENT, amount: amount.negated(), note, recordedById } });
     await tx.creditAccountCache.update({ where: { customerId }, data: { currentBalance: { decrement: amount } } });
+  }
+
+  private async postRepayment(tx: Prisma.TransactionClient, companyId: string, shopId: string, recordedById: string, repaymentId: string, method: PaymentMethod, amount: Prisma.Decimal, date: Date | null) {
+    await this.accountSeeder.initializeInTransaction(tx, companyId, shopId);
+    await this.accounting.post(tx, {
+      companyId, shopId, recordedById, eventType: AccountingEventType.CUSTOMER_REPAYMENT,
+      transactionDate: date ?? new Date(), description: `${method} customer credit repayment`,
+      source: { type: AccountingSourceType.CREDIT_REPAYMENT, id: repaymentId },
+      lines: [
+        { purpose: method === PaymentMethod.CASH ? AccountPurpose.CASH_ON_HAND : AccountPurpose.MPESA, side: JournalSide.DEBIT, amount },
+        { purpose: AccountPurpose.CUSTOMER_RECEIVABLE, side: JournalSide.CREDIT, amount },
+      ],
+    });
   }
 }

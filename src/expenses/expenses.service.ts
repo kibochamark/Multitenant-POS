@@ -8,9 +8,9 @@ export class ExpensesService {
   private readonly logger = new Logger(ExpensesService.name);
   constructor(private readonly repository: ExpensesRepository) {}
 
-  create(shopId: string, userId: string, data: CreateExpenseDto) {
+  async create(companyId: string, shopId: string, userId: string, data: CreateExpenseDto) {
     this.logger.log(`Preparing expense creation for shop ${shopId}`);
-    return this.repository.create(shopId, userId, {
+    return await this.repository.create(companyId, shopId, userId, {
       amount: new Prisma.Decimal(data.amount),
       category: data.category.trim(),
       description: data.description.trim(),

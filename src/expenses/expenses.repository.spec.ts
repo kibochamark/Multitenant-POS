@@ -3,19 +3,32 @@ import { ExpensesRepository } from './expenses.repository';
 describe('ExpensesRepository', () => {
   const create = jest.fn();
   const findMany = jest.fn();
-  const repository = new ExpensesRepository({
-    expense: { create, findMany },
-  } as never);
+  const transaction = jest.fn(async (work: (tx: unknown) => unknown) => work({ expense: { create } }));
+  const initializeInTransaction = jest.fn();
+  const post = jest.fn();
+  const repository = new ExpensesRepository(
+    { expense: { findMany }, $transaction: transaction } as never,
+    { initializeInTransaction } as never,
+    { post } as never,
+  );
 
   beforeEach(() => jest.clearAllMocks());
 
   it('records the authenticated internal user and returns recorder details', async () => {
-    create.mockResolvedValue({ id: 'expense-1' });
-
-    await repository.create('shop-1', 'user-1', {
+    create.mockResolvedValue({
+      id: 'expense-1',
       amount: {} as never,
       category: 'Utilities',
       description: 'Internet bill',
+      createdAt: new Date(),
+      mpesaReference: null,
+    });
+
+    await repository.create('company-1', 'shop-1', 'user-1', {
+      amount: {} as never,
+      category: 'Utilities',
+      description: 'Internet bill',
+      paymentMethod: 'CASH',
     });
 
     expect(create).toHaveBeenCalledWith({
@@ -28,6 +41,8 @@ describe('ExpensesRepository', () => {
         recordedBy: { select: { id: true, name: true, email: true } },
       },
     });
+    expect(initializeInTransaction).toHaveBeenCalled();
+    expect(post).toHaveBeenCalled();
   });
 
   it('scopes expense history to the selected shop', async () => {

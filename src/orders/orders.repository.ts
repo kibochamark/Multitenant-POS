@@ -6,9 +6,14 @@ import {
   PaymentStatus,
   Prisma,
   StockMovementType,
+  AccountingEventType,
+  AccountingSourceType,
 } from 'generated/prisma/client';
 import { PrismaService } from 'src/globalservices/prisma/prisma.service';
 import { OrderHistoryQueryDto } from './dto/order-history-query.dto';
+import { AccountSeederService } from 'src/accounting/account-seeder.service';
+import { AccountingPostingService } from 'src/accounting/accounting-posting.service';
+import { saleRecognitionLines } from 'src/accounting/accounting-lines';
 
 export const orderReadInclude = {
   customer: { select: { id: true, name: true, phone: true, email: true } },
@@ -40,7 +45,7 @@ export const orderReadInclude = {
 @Injectable()
 export class OrdersRepository {
   private readonly logger = new Logger(OrdersRepository.name);
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly accountSeeder: AccountSeederService, private readonly accounting: AccountingPostingService) {}
 
   find(shopId: string, orderId: string) {
     this.logger.log(`Retrieving order ${orderId} in shop ${shopId}`);
@@ -121,6 +126,18 @@ export class OrdersRepository {
 
       const cancellation = await tx.orderCancellation.create({
         data: { orderId, cancelledById: userId, reason },
+      });
+      const shop = await tx.shop.findUniqueOrThrow({ where: { id: shopId }, select: { companyId: true } });
+      await this.accountSeeder.initializeInTransaction(tx, shop.companyId, shopId);
+      await this.accounting.post(tx, {
+        companyId: shop.companyId,
+        shopId,
+        recordedById: userId,
+        eventType: AccountingEventType.ORDER_CANCELLATION,
+        transactionDate: new Date(),
+        description: `Cancellation of unpaid order ${order.id}: ${reason}`,
+        source: { type: AccountingSourceType.ORDER_CANCELLATION, id: cancellation.id },
+        lines: saleRecognitionLines(order, true),
       });
       for (const line of order.lineItems.filter((item) => item.itemType === ItemType.PRODUCT)) {
         const stock = await tx.stockCache.updateMany({

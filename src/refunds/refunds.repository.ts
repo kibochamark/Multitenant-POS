@@ -1,5 +1,7 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { CreditTransactionType, ItemType, OrderRefundStatus, PaymentMethod, PaymentStatus, Prisma, RefundDisposition, StockMovementType } from 'generated/prisma/client';
+import { AccountPurpose, AccountingEventType, AccountingSourceType, CreditTransactionType, ItemType, JournalSide, OrderRefundStatus, PaymentMethod, PaymentStatus, Prisma, RefundDisposition, StockMovementType } from 'generated/prisma/client';
+import { AccountSeederService } from 'src/accounting/account-seeder.service';
+import { AccountingPostingService } from 'src/accounting/accounting-posting.service';
 import { PrismaService } from 'src/globalservices/prisma/prisma.service';
 import { CreateRefundDto } from './dto/create-refund.dto';
 
@@ -11,7 +13,7 @@ type Allocation = { method: PaymentMethod; amount: Prisma.Decimal; referenceCode
 @Injectable()
 export class RefundsRepository {
   private readonly logger = new Logger(RefundsRepository.name);
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly accountSeeder: AccountSeederService, private readonly accounting: AccountingPostingService) {}
 
   process(shopId: string, orderId: string, userId: string, data: CreateRefundDto) {
     this.logger.log(`Processing refund for order ${orderId} in shop ${shopId}`);
@@ -27,6 +29,7 @@ export class RefundsRepository {
       await this.restoreReturnedStock(tx, shopId, refund.id, userId, data.reason, lines);
       await this.reduceCustomerCredit(tx, order, refund.id, userId, allocations);
       await this.createRefundPayments(tx, refund.id, userId, allocations);
+      await this.postRefund(tx, shopId, order, refund.id, userId, total, allocations);
       await this.updateOrderRefundSummary(tx, order.id, order.total, order.refundedAmount, total);
       return this.loadRefundResult(tx, refund.id);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -126,5 +129,31 @@ export class RefundsRepository {
 
   private loadRefundResult(tx: Tx, refundId: string) {
     return tx.refund.findUniqueOrThrow({ where: { id: refundId }, include: { staff: { select: { id: true, name: true } }, lineItems: true, payments: { include: { recordedBy: { select: { id: true, name: true } } } }, creditTransactions: true, order: { select: { id: true, total: true, refundedAmount: true, refundStatus: true } } } });
+  }
+
+  private async postRefund(tx: Tx, shopId: string, order: NonNullable<LoadedOrder>, refundId: string, userId: string, total: Prisma.Decimal, allocations: Allocation[]) {
+    const shop = await tx.shop.findUniqueOrThrow({ where: { id: shopId }, select: { companyId: true } });
+    await this.accountSeeder.initializeInTransaction(tx, shop.companyId, shopId);
+    const vat = order.total.isZero() ? new Prisma.Decimal(0) : total.mul(order.vatAmount).div(order.total).toDecimalPlaces(2);
+    const net = total.sub(vat);
+    const lines = [
+      ...(net.isPositive() ? [{ purpose: AccountPurpose.SALES_RETURNS, side: JournalSide.DEBIT, amount: net }] : []),
+      ...(vat.isPositive() ? [{ purpose: AccountPurpose.VAT_PAYABLE, side: JournalSide.DEBIT, amount: vat }] : []),
+      ...allocations.map((allocation) => ({
+        purpose: allocation.method === PaymentMethod.CASH
+          ? AccountPurpose.CASH_ON_HAND
+          : allocation.method === PaymentMethod.MPESA
+            ? AccountPurpose.MPESA
+            : AccountPurpose.CUSTOMER_RECEIVABLE,
+        side: JournalSide.CREDIT,
+        amount: allocation.amount,
+      })),
+    ];
+    await this.accounting.post(tx, {
+      companyId: shop.companyId, shopId, recordedById: userId,
+      eventType: AccountingEventType.REFUND, transactionDate: new Date(),
+      description: `Refund for order ${order.id}`,
+      source: { type: AccountingSourceType.REFUND, id: refundId }, lines,
+    });
   }
 }

@@ -4,6 +4,7 @@ import { ShopAccessGuard } from 'src/guards/shop-access.guard';
 import { RefundsController } from './refunds.controller';
 import { RefundsRepository } from './refunds.repository';
 import { RefundsService } from './refunds.service';
+import { AccountingModule } from 'src/accounting/accounting.module';
 
-@Module({ controllers: [RefundsController], providers: [RefundsService, RefundsRepository, AuthGuard, ShopAccessGuard] })
+@Module({ imports: [AccountingModule], controllers: [RefundsController], providers: [RefundsService, RefundsRepository, AuthGuard, ShopAccessGuard] })
 export class RefundsModule {}

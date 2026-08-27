@@ -32,7 +32,7 @@ export class ExpensesController {
     this.logger.log(`Expense request received for shop ${shopId}`);
     return {
       status: 201,
-      data: await this.service.create(shopId, request.user!.id, data),
+      data: await this.service.create(request.user!.companyId, shopId, request.user!.id, data),
       error: null,
     };
   }

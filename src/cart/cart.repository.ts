@@ -16,13 +16,22 @@ import {
   CreditTransactionType,
   Prisma,
   StockMovementType,
+  AccountingEventType,
+  AccountingSourceType,
 } from 'generated/prisma/client';
 import { PrismaService } from 'src/globalservices/prisma/prisma.service';
+import { AccountSeederService } from 'src/accounting/account-seeder.service';
+import { AccountingPostingService } from 'src/accounting/accounting-posting.service';
+import { saleRecognitionLines } from 'src/accounting/accounting-lines';
 
 @Injectable()
 export class CartRepository {
   private readonly logger = new Logger(CartRepository.name);
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly accountSeeder: AccountSeederService,
+    private readonly accounting: AccountingPostingService,
+  ) {}
 
   async scanProduct(
     shopId: string,
@@ -421,6 +430,20 @@ export class CartRepository {
             lineItems: { create: lineSnapshots },
           },
           select: { id: true },
+        });
+
+        // Checkout recognizes revenue once, regardless of whether settlement
+        // happens now, through several payments, or later as customer credit.
+        await this.accountSeeder.initializeInTransaction(tx, shop.companyId, shopId);
+        await this.accounting.post(tx, {
+          companyId: shop.companyId,
+          shopId,
+          recordedById: staffId,
+          eventType: settlement === 'CREDIT' ? AccountingEventType.CREDIT_SALE : AccountingEventType.SALE,
+          transactionDate: new Date(),
+          description: `Sale recognized for order ${order.id}`,
+          source: { type: AccountingSourceType.ORDER, id: order.id },
+          lines: saleRecognitionLines({ total, subtotal, vatAmount, lineItems: lineSnapshots }),
         });
 
         // Credit is a receivable, not money received. At credit checkout we
