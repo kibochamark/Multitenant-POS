@@ -4,7 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from 'generated/prisma/client';
+import { PaymentMethod, Prisma } from 'generated/prisma/client';
 import { CreateProductDto } from './dto/create-product.dto';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { CatalogRepository } from './catalog.repository';
@@ -90,6 +90,11 @@ export class CatalogService {
         name: data.name.trim(),
         price: new Prisma.Decimal(data.price),
         createdById,
+        paymentMethod: data.paymentMethod as PaymentMethod,
+        mpesaReference:
+          data.paymentMethod === 'MPESA' && data.mpesaReference?.trim()
+            ? data.mpesaReference.trim().toUpperCase()
+            : null,
         ...(data.category?.trim() ? { category: data.category.trim() } : {}),
       });
       this.logger.log(`Service ${service.id} is ready for shop ${shopId}`);
@@ -163,6 +168,18 @@ export class CatalogService {
           ? { category: data.category.trim() || null }
           : {}),
         ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+        ...(data.paymentMethod !== undefined
+          ? { paymentMethod: data.paymentMethod as PaymentMethod }
+          : {}),
+        ...(data.paymentMethod === 'CASH'
+          ? { mpesaReference: null }
+          : data.mpesaReference !== undefined
+            ? {
+                mpesaReference: data.mpesaReference.trim()
+                  ? data.mpesaReference.trim().toUpperCase()
+                  : null,
+              }
+            : {}),
       },
     );
     if (!service) throw new NotFoundException('Service not found');

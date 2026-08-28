@@ -12,3 +12,8 @@ export class VerifyCreditRepaymentDto {
   @IsIn(['CONFIRMED', 'FAILED']) result: 'CONFIRMED' | 'FAILED';
   @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
+export class CreditAdjustmentDto {
+  @IsIn(['DISCOUNT', 'PARDON']) type: 'DISCOUNT' | 'PARDON';
+  @IsDecimal({ decimal_digits: '0,2', force_decimal: false }) @Matches(POSITIVE_MONEY) amount: string;
+  @IsString() @MinLength(3) @MaxLength(500) reason: string;
+}

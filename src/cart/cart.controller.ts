@@ -17,6 +17,7 @@ import { CartService } from './cart.service';
 import { ActiveCartQueryDto, ScanBarcodeDto } from './dto/scan-barcode.dto';
 import { CheckoutCartDto } from './dto/checkout-cart.dto';
 import { ApplyCartDiscountDto } from './dto/apply-cart-discount.dto';
+import { ApplyCartUpsellDto } from './dto/apply-cart-upsell.dto';
 
 @Controller('shops/:shopId/carts')
 export class CartController {
@@ -100,6 +101,20 @@ export class CartController {
       ),
       error: null,
     };
+  }
+
+  @Patch(':cartId/items/:cartItemId/upsell')
+  @Version('1')
+  @RequireShopAccess('shopId')
+  async applyUpsell(
+    @Param('shopId') shopId: string,
+    @Param('cartId') cartId: string,
+    @Param('cartItemId') cartItemId: string,
+    @Req() request: AuthenticatedRequest,
+    @Body() data: ApplyCartUpsellDto,
+  ) {
+    this.logger.log(`Upsell request received for cart item ${cartItemId}`);
+    return { status: 200, data: await this.service.applyUpsell(shopId, cartId, cartItemId, request.user!.id, data), error: null };
   }
 
   @Post(':cartId/checkout')

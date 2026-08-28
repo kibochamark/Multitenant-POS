@@ -48,6 +48,7 @@ describe('CatalogRepository', () => {
       name: 'Laptop diagnosis',
       price: {} as never,
       createdById: 'user-1',
+      paymentMethod: 'CASH' as never,
     });
 
     const call = serviceCreate.mock.calls[0][0];

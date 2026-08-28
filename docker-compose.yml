@@ -11,15 +11,26 @@ services:
       - "5432:5432"
     volumes:
       - ./postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dantech"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - dantech-network
 
   prisma-migrate:
-    image: node:20-alpine
-    working_dir: /app
-    volumes:
-      - .:/app
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migration
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/dantech?schema=public
     depends_on:
-      - postgres
-    command: sh -c "npm install && npx prisma db push && npx prisma generate"
+      postgres:
+        condition: service_healthy
+    networks:
+      - dantech-network
 
 
   redis:
@@ -29,6 +40,13 @@ services:
       - "6379:6379"
     volumes:
       - ./redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - dantech-network
 
   
   dantech-server:
@@ -38,17 +56,24 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     environment:
-      - DATABASE_URL =""
-      - PORT = 5000
-      - KINDE_ISSUER_URL=https://dantechcomputers.kinde.com
-      - WHATSAPP_ACCESS_TOKEN=""
-      - WHATSAPP_PHONE_NUMBER_ID=""
-      - WHATSAPP_GRAPH_API_VERSION=v25.0
-      - NOTIFICATION_TRANSPORT=whatsapp
-      - NOTIFICATION_CREDENTIALS_KEY=""
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/dantech?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      prisma-migrate:
+        condition: service_completed_successfully
     ports:
       - "5000:5000"
     init: true
     restart: unless-stopped
-      
+    networks:
+      - dantech-network
 
+networks:
+  dantech-network:
+    name: dantech-network

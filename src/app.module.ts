@@ -24,6 +24,7 @@ import { AdministrationModule } from './administration/administration.module';
 import { AccountsModule } from './accounts/accounts.module';
 import { RefundsModule } from './refunds/refunds.module';
 import { AccountingModule } from './accounting/accounting.module';
+import { SurplusModule } from './surplus/surplus.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { AccountingModule } from './accounting/accounting.module';
     AccountsModule,
     RefundsModule,
     AccountingModule,
+    SurplusModule,
   ],
   controllers: [],
 })

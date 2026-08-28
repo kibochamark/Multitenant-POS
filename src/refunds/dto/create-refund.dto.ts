@@ -6,6 +6,7 @@ const money = /^(?!0+(?:\.0{1,2})?$)\d+(?:\.\d{1,2})?$/;
 export class RefundLineDto {
   @IsUUID() orderLineItemId!: string;
   @IsInt() @Min(1) quantity!: number;
+  @Matches(money, { message: 'refundAmount must be greater than zero with at most 2 decimal places' }) refundAmount!: string;
   @IsIn(['RESTOCK', 'DAMAGED', 'NOT_RETURNED']) disposition!: 'RESTOCK' | 'DAMAGED' | 'NOT_RETURNED';
 }
 

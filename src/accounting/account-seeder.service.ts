@@ -10,14 +10,18 @@ const SHOP_ACCOUNTS: Array<{ code: string; name: string; type: AccountType; purp
   { code: '1300', name: 'Inventory', type: AccountType.ASSET, purpose: AccountPurpose.INVENTORY },
   { code: '1390', name: 'Unallocated inventory cost', type: AccountType.ASSET, purpose: AccountPurpose.UNALLOCATED_INVENTORY_COST },
   { code: '2100', name: 'VAT payable', type: AccountType.LIABILITY, purpose: AccountPurpose.VAT_PAYABLE },
+  { code: '2200', name: 'Cashier surplus payable', type: AccountType.LIABILITY, purpose: AccountPurpose.CASHIER_SURPLUS_PAYABLE },
   { code: '3100', name: 'Owner capital', type: AccountType.EQUITY, purpose: AccountPurpose.OWNER_CAPITAL },
   { code: '3200', name: 'Owner drawings', type: AccountType.EQUITY, purpose: AccountPurpose.OWNER_DRAWINGS },
   { code: '4100', name: 'Product revenue', type: AccountType.REVENUE, purpose: AccountPurpose.PRODUCT_REVENUE },
   { code: '4200', name: 'Service revenue', type: AccountType.REVENUE, purpose: AccountPurpose.SERVICE_REVENUE },
   { code: '4900', name: 'Sales returns', type: AccountType.REVENUE, purpose: AccountPurpose.SALES_RETURNS },
+  { code: '4910', name: 'Credit sales discounts', type: AccountType.REVENUE, purpose: AccountPurpose.SALES_DISCOUNTS },
   { code: '5100', name: 'Cost of goods sold', type: AccountType.EXPENSE, purpose: AccountPurpose.COST_OF_GOODS_SOLD },
   { code: '5800', name: 'General expense', type: AccountType.EXPENSE, purpose: AccountPurpose.GENERAL_EXPENSE },
   { code: '5900', name: 'Cash over and short', type: AccountType.EXPENSE, purpose: AccountPurpose.CASH_OVER_SHORT },
+  { code: '5950', name: 'Cashier surplus expense', type: AccountType.EXPENSE, purpose: AccountPurpose.CASHIER_SURPLUS_EXPENSE },
+  { code: '5960', name: 'Bad debt expense', type: AccountType.EXPENSE, purpose: AccountPurpose.BAD_DEBT_EXPENSE },
 ];
 
 @Injectable()

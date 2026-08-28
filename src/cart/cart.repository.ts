@@ -18,6 +18,8 @@ import {
   StockMovementType,
   AccountingEventType,
   AccountingSourceType,
+  AccountPurpose,
+  JournalSide,
 } from 'generated/prisma/client';
 import { PrismaService } from 'src/globalservices/prisma/prisma.service';
 import { AccountSeederService } from 'src/accounting/account-seeder.service';
@@ -279,6 +281,9 @@ export class CartRepository {
             belowFloor,
             discountReason: cleanedReason || null,
             discountAppliedById: staffId,
+            surplusUnitAmount: new Prisma.Decimal(0),
+            surplusReason: null,
+            surplusAppliedById: null,
           },
         });
         await tx.cart.update({
@@ -312,6 +317,37 @@ export class CartRepository {
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+  }
+
+  async applyUpsell(shopId: string, cartId: string, cartItemId: string, staffId: string, stationId: string, negotiatedUnitPrice: Prisma.Decimal, reason?: string) {
+    this.logger.log(`Applying negotiated upsell price to cart item ${cartItemId}`);
+    const activeKey = `${shopId}:${staffId}:${stationId}`;
+    return await this.prisma.$transaction(async (tx) => {
+      const item = await tx.cartItem.findFirst({
+        where: { id: cartItemId, cartId, itemType: ItemType.PRODUCT, cart: { shopId, staffId, stationId, activeKey, status: CartStatus.ACTIVE } },
+      });
+      if (!item) throw new NotFoundException('Active product cart item not found');
+      if (!negotiatedUnitPrice.greaterThan(item.originalUnitPrice))
+        throw new ConflictException('Negotiated price must be higher than the catalogue price');
+
+      await tx.cartItem.update({
+        where: { id: item.id },
+        data: {
+          finalUnitPrice: negotiatedUnitPrice.toDecimalPlaces(2),
+          surplusUnitAmount: negotiatedUnitPrice.sub(item.originalUnitPrice).toDecimalPlaces(2),
+          surplusReason: reason?.trim() || null,
+          surplusAppliedById: staffId,
+          discountType: null,
+          discountValue: null,
+          discountReason: null,
+          discountAppliedById: null,
+          belowFloor: false,
+        },
+      });
+      await tx.cart.update({ where: { id: cartId }, data: { updatedAt: new Date() } });
+      const cart = await tx.cart.findUniqueOrThrow({ where: { id: cartId }, include: { items: { orderBy: { createdAt: 'asc' } } } });
+      return await this.hydrateProducts(tx, cart);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async checkout(
@@ -399,6 +435,10 @@ export class CartRepository {
           belowFloor: item.belowFloor,
           discountReason: item.discountReason,
           discountAppliedById: item.discountAppliedById,
+          surplusUnitAmount: item.surplusUnitAmount ?? new Prisma.Decimal(0),
+          surplusTotal: (item.surplusUnitAmount ?? new Prisma.Decimal(0)).mul(item.quantity).toDecimalPlaces(2),
+          surplusReason: item.surplusReason,
+          surplusAppliedById: item.surplusAppliedById,
         }));
         const total = lineSnapshots
           .reduce((sum, line) => sum.add(line.lineTotal), new Prisma.Decimal(0))
@@ -408,6 +448,10 @@ export class CartRepository {
           ? new Prisma.Decimal(0)
           : total.mul(vatPct).div(vatPct.add(100)).toDecimalPlaces(2);
         const subtotal = total.sub(vatAmount).toDecimalPlaces(2);
+        const surplusTotal = lineSnapshots.reduce(
+          (sum, line) => sum.add(line.surplusTotal),
+          new Prisma.Decimal(0),
+        ).toDecimalPlaces(2);
 
         if (settlement === 'CREDIT' && customer) {
           const currentBalance = customer.creditAccount?.currentBalance ?? new Prisma.Decimal(0);
@@ -443,7 +487,15 @@ export class CartRepository {
           transactionDate: new Date(),
           description: `Sale recognized for order ${order.id}`,
           source: { type: AccountingSourceType.ORDER, id: order.id },
-          lines: saleRecognitionLines({ total, subtotal, vatAmount, lineItems: lineSnapshots }),
+          lines: [
+            ...saleRecognitionLines({ total, subtotal, vatAmount, lineItems: lineSnapshots }),
+            ...(surplusTotal.isPositive()
+              ? [
+                  { purpose: AccountPurpose.CASHIER_SURPLUS_EXPENSE, side: JournalSide.DEBIT, amount: surplusTotal },
+                  { purpose: AccountPurpose.CASHIER_SURPLUS_PAYABLE, side: JournalSide.CREDIT, amount: surplusTotal },
+                ]
+              : []),
+          ],
         });
 
         // Credit is a receivable, not money received. At credit checkout we

@@ -5,6 +5,7 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  IsIn,
 } from 'class-validator';
 
 const MONEY_PATTERN = /^\d+(\.\d{1,2})?$/;
@@ -26,4 +27,12 @@ export class CreateServiceDto {
   @IsString()
   @MaxLength(100)
   category?: string;
+
+  @IsIn(['CASH', 'MPESA'])
+  paymentMethod: 'CASH' | 'MPESA';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  mpesaReference?: string;
 }

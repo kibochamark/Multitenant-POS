@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
-import { Prisma, Product, StockMovementType } from 'generated/prisma/client';
+import { PaymentMethod, Prisma, Product, StockMovementType } from 'generated/prisma/client';
 import { PrismaService } from 'src/globalservices/prisma/prisma.service';
 import { generateInternalEan13 } from './barcode.util';
 
@@ -23,6 +23,8 @@ export interface CreateServiceData {
   price: Prisma.Decimal;
   category?: string;
   createdById: string;
+  paymentMethod: PaymentMethod;
+  mpesaReference?: string | null;
 }
 
 const serviceRecorderInclude = {

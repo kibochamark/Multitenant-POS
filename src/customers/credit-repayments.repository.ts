@@ -58,6 +58,29 @@ export class CreditRepaymentsRepository {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
+  async adjust(companyId: string, shopId: string, customerId: string, userId: string, type: 'DISCOUNT' | 'PARDON', amount: Prisma.Decimal, reason: string) {
+    this.logger.log(`Applying ${type} to customer ${customerId}`);
+    return await this.prisma.$transaction(async (tx) => {
+      const customer = await this.loadAccount(tx, companyId, customerId);
+      const balance = customer.creditAccount?.currentBalance ?? new Prisma.Decimal(0);
+      await this.assertAvailable(tx, customerId, balance, amount);
+      const updated = await tx.creditAccountCache.updateMany({ where: { customerId, currentBalance: { gte: amount } }, data: { currentBalance: { decrement: amount } } });
+      if (updated.count !== 1) throw new ConflictException('Customer balance changed; reload and try again');
+      const transaction = await tx.creditTransaction.create({ data: { customerId, type: type === 'DISCOUNT' ? CreditTransactionType.CREDIT_DISCOUNT : CreditTransactionType.DEBT_FORGIVENESS, amount: amount.negated(), note: reason, recordedById: userId }, include: { recordedBy: { select: { id: true, name: true } } } });
+      await this.accountSeeder.initializeInTransaction(tx, companyId, shopId);
+      await this.accounting.post(tx, {
+        companyId, shopId, recordedById: userId, eventType: AccountingEventType.CREDIT_ADJUSTMENT,
+        transactionDate: new Date(), description: `${type === 'DISCOUNT' ? 'Credit discount' : 'Debt pardon'} for ${customer.name}: ${reason}`,
+        source: { type: AccountingSourceType.CREDIT_TRANSACTION, id: transaction.id },
+        lines: [
+          { purpose: type === 'DISCOUNT' ? AccountPurpose.SALES_DISCOUNTS : AccountPurpose.BAD_DEBT_EXPENSE, side: JournalSide.DEBIT, amount },
+          { purpose: AccountPurpose.CUSTOMER_RECEIVABLE, side: JournalSide.CREDIT, amount },
+        ],
+      });
+      return transaction;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
   private async loadAccount(tx: Prisma.TransactionClient, companyId: string, customerId: string) {
     const customer = await tx.customer.findFirst({ where: { id: customerId, companyId }, include: { creditAccount: true } });
     if (!customer) throw new ConflictException('Customer credit account was not found');

@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from 'generated/prisma/client';
-import { CashCreditRepaymentDto, MpesaCreditRepaymentDto, VerifyCreditRepaymentDto } from './dto/credit-repayment.dto';
+import { CashCreditRepaymentDto, CreditAdjustmentDto, MpesaCreditRepaymentDto, VerifyCreditRepaymentDto } from './dto/credit-repayment.dto';
 import { CreditRepaymentsRepository } from './credit-repayments.repository';
 
 @Injectable()
@@ -11,4 +11,5 @@ export class CreditRepaymentsService {
   cash(companyId: string, shopId: string, customerId: string, userId: string, data: CashCreditRepaymentDto) { return this.repository.recordCash(companyId, shopId, customerId, userId, new Prisma.Decimal(data.amount), data.note?.trim() || undefined); }
   mpesa(companyId: string, shopId: string, customerId: string, userId: string, data: MpesaCreditRepaymentDto) { return this.repository.recordMpesa(companyId, shopId, customerId, userId, new Prisma.Decimal(data.amount), data.referenceCode.trim().toUpperCase(), data.note?.trim() || undefined); }
   async verify(companyId: string, shopId: string, customerId: string, repaymentId: string, verifierId: string, data: VerifyCreditRepaymentDto) { const result = await this.repository.verify(companyId, shopId, customerId, repaymentId, verifierId, data.result, data.reason); if (!result) throw new NotFoundException('Pending M-Pesa repayment not found'); return result; }
+  async adjust(companyId: string, shopId: string, customerId: string, userId: string, data: CreditAdjustmentDto) { this.logger.log(`Preparing ${data.type} credit adjustment`); return await this.repository.adjust(companyId, shopId, customerId, userId, data.type, new Prisma.Decimal(data.amount), data.reason.trim()); }
 }

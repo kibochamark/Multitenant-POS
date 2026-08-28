@@ -7,7 +7,7 @@ import { CreateRefundDto } from './dto/create-refund.dto';
 
 type Tx = Prisma.TransactionClient;
 type LoadedOrder = Awaited<ReturnType<RefundsRepository['loadRefundableOrder']>>;
-type ValidLine = { id: string; itemId: string; itemType: ItemType; quantity: number; disposition: RefundDisposition; amount: Prisma.Decimal };
+type ValidLine = { id: string; itemId: string; itemType: ItemType; quantity: number; disposition: RefundDisposition; amount: Prisma.Decimal; surplusReversed: Prisma.Decimal };
 type Allocation = { method: PaymentMethod; amount: Prisma.Decimal; referenceCode?: string };
 
 @Injectable()
@@ -15,9 +15,9 @@ export class RefundsRepository {
   private readonly logger = new Logger(RefundsRepository.name);
   constructor(private readonly prisma: PrismaService, private readonly accountSeeder: AccountSeederService, private readonly accounting: AccountingPostingService) {}
 
-  process(shopId: string, orderId: string, userId: string, data: CreateRefundDto) {
+  async process(shopId: string, orderId: string, userId: string, data: CreateRefundDto) {
     this.logger.log(`Processing refund for order ${orderId} in shop ${shopId}`);
-    return this.prisma.$transaction(async (tx) => {
+    return await this.prisma.$transaction(async (tx) => {
       const order = await this.loadRefundableOrder(tx, shopId, orderId);
       const lines = this.validateRefundLines(order, data);
       const total = lines.reduce((sum, line) => sum.add(line.amount), new Prisma.Decimal(0)).toDecimalPlaces(2);
@@ -60,7 +60,17 @@ export class RefundsRepository {
       const alreadyRefunded = line.refundLineItems.reduce((sum, item) => sum + item.quantity, 0);
       if (requested.quantity > line.quantity - alreadyRefunded) throw new ConflictException(`Refund quantity exceeds the remaining quantity for line ${line.id}`);
       if (line.itemType === ItemType.SERVICE && requested.disposition !== RefundDisposition.NOT_RETURNED) throw new ConflictException('Services must use NOT_RETURNED because they do not affect stock');
-      return { id: line.id, itemId: line.itemId, itemType: line.itemType, quantity: requested.quantity, disposition: requested.disposition as RefundDisposition, amount: line.finalUnitPrice.mul(requested.quantity).toDecimalPlaces(2) };
+      const amount = new Prisma.Decimal(requested.refundAmount);
+      const amountAlreadyRefunded = line.refundLineItems.reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0));
+      const amountRemaining = line.lineTotal.sub(amountAlreadyRefunded);
+      if (amount.greaterThan(amountRemaining)) throw new ConflictException(`Refund amount exceeds the remaining value for line ${line.id}`);
+      const surplusAlreadyReversed = line.refundLineItems.reduce((sum, item) => sum.add(item.surplusReversed), new Prisma.Decimal(0));
+      // Surplus belongs to units that remain sold. When a physical unit is
+      // returned, reverse that unit's full surplus even when the owner chooses
+      // to refund less than the original selling price.
+      const returnedUnitSurplus = line.surplusUnitAmount.mul(requested.quantity).toDecimalPlaces(2);
+      const surplusReversed = Prisma.Decimal.min(returnedUnitSurplus, line.surplusTotal.sub(surplusAlreadyReversed));
+      return { id: line.id, itemId: line.itemId, itemType: line.itemType, quantity: requested.quantity, disposition: requested.disposition as RefundDisposition, amount, surplusReversed };
     });
   }
 
@@ -97,7 +107,7 @@ export class RefundsRepository {
   }
 
   private createRefundRecord(tx: Tx, orderId: string, userId: string, reason: string, total: Prisma.Decimal, lines: ValidLine[]) {
-    return tx.refund.create({ data: { orderId, staffId: userId, reason: reason.trim(), totalAmount: total, lineItems: { create: lines.map((line) => ({ orderLineItemId: line.id, quantity: line.quantity, amount: line.amount, disposition: line.disposition })) } } });
+    return tx.refund.create({ data: { orderId, staffId: userId, reason: reason.trim(), totalAmount: total, lineItems: { create: lines.map((line) => ({ orderLineItemId: line.id, quantity: line.quantity, amount: line.amount, disposition: line.disposition, surplusReversed: line.surplusReversed })) } } });
   }
 
   private async restoreReturnedStock(tx: Tx, shopId: string, refundId: string, userId: string, reason: string, lines: ValidLine[]) {
@@ -136,7 +146,7 @@ export class RefundsRepository {
     await this.accountSeeder.initializeInTransaction(tx, shop.companyId, shopId);
     const vat = order.total.isZero() ? new Prisma.Decimal(0) : total.mul(order.vatAmount).div(order.total).toDecimalPlaces(2);
     const net = total.sub(vat);
-    const lines = [
+    const lines: Array<{ purpose: AccountPurpose; side: JournalSide; amount: Prisma.Decimal }> = [
       ...(net.isPositive() ? [{ purpose: AccountPurpose.SALES_RETURNS, side: JournalSide.DEBIT, amount: net }] : []),
       ...(vat.isPositive() ? [{ purpose: AccountPurpose.VAT_PAYABLE, side: JournalSide.DEBIT, amount: vat }] : []),
       ...allocations.map((allocation) => ({
@@ -149,6 +159,14 @@ export class RefundsRepository {
         amount: allocation.amount,
       })),
     ];
+    const currentSurplusReversed = await tx.refundLineItem.aggregate({ where: { refundId }, _sum: { surplusReversed: true } });
+    const reversal = currentSurplusReversed._sum.surplusReversed ?? new Prisma.Decimal(0);
+    if (reversal.isPositive()) {
+      lines.push(
+        { purpose: AccountPurpose.CASHIER_SURPLUS_PAYABLE, side: JournalSide.DEBIT, amount: reversal },
+        { purpose: AccountPurpose.CASHIER_SURPLUS_EXPENSE, side: JournalSide.CREDIT, amount: reversal },
+      );
+    }
     await this.accounting.post(tx, {
       companyId: shop.companyId, shopId, recordedById: userId,
       eventType: AccountingEventType.REFUND, transactionDate: new Date(),

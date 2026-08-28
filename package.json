@@ -4,6 +4,14 @@
   "description": "",
   "author": "",
   "private": true,
+  "packageManager": "pnpm@10.14.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "msgpackr-extract",
+      "prisma"
+    ]
+  },
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",

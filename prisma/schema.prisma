@@ -110,6 +110,8 @@ enum CreditTransactionType {
   REPAYMENT
   REFUND
   ADJUSTMENT
+  CREDIT_DISCOUNT
+  DEBT_FORGIVENESS
 }
 
 enum NotificationType {
@@ -176,6 +178,10 @@ enum AccountPurpose {
   GENERAL_EXPENSE
   CASH_OVER_SHORT
   UNALLOCATED_INVENTORY_COST
+  CASHIER_SURPLUS_PAYABLE
+  CASHIER_SURPLUS_EXPENSE
+  SALES_DISCOUNTS
+  BAD_DEBT_EXPENSE
 }
 
 enum AccountingPeriodStatus {
@@ -210,6 +216,8 @@ enum AccountingEventType {
   STOCK_ADJUSTMENT
   ORDER_CANCELLATION
   MANUAL_ADJUSTMENT
+  CASHIER_SURPLUS_SETTLEMENT
+  CREDIT_ADJUSTMENT
 }
 
 enum AccountingSourceType {
@@ -225,6 +233,7 @@ enum AccountingSourceType {
   INVENTORY_PURCHASE
   MANUAL_JOURNAL
   SHOP_DAILY_ACCOUNT
+  CASHIER_SURPLUS_SETTLEMENT
 }
 
 // ─────────────────────────────────────────────────────────
@@ -262,19 +271,20 @@ model Shop {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  company        Company            @relation(fields: [companyId], references: [id])
-  products       Product[]
-  services       Service[]
-  carts          Cart[]
-  orders         Order[]
-  expenses       Expense[]
-  writeOffs      WriteOff[]
-  userRoles      UserShopRole[]
-  notifications  Notification[]
-  mpesaAccounts  MpesaAccount[]
-  dailyAccounts  ShopDailyAccount[]
-  accounts       Account[]
-  journalEntries JournalEntry[]
+  company            Company                    @relation(fields: [companyId], references: [id])
+  products           Product[]
+  services           Service[]
+  carts              Cart[]
+  orders             Order[]
+  expenses           Expense[]
+  writeOffs          WriteOff[]
+  userRoles          UserShopRole[]
+  notifications      Notification[]
+  mpesaAccounts      MpesaAccount[]
+  dailyAccounts      ShopDailyAccount[]
+  accounts           Account[]
+  journalEntries     JournalEntry[]
+  surplusSettlements CashierSurplusSettlement[]
 
   @@index([companyId])
   @@map("shops")
@@ -321,6 +331,10 @@ model User {
   dailyAccountsRecorded    ShopDailyAccount[]          @relation("DailyAccountRecordedBy")
   journalEntriesRecorded   JournalEntry[]              @relation("JournalEntryRecordedBy")
   accountingPeriodsClosed  AccountingPeriod[]          @relation("AccountingPeriodClosedBy")
+  cartSurplusesApplied     CartItem[]                  @relation("CartSurplusAppliedBy")
+  orderSurplusesApplied    OrderLineItem[]             @relation("OrderSurplusAppliedBy")
+  surplusSettlements       CashierSurplusSettlement[]  @relation("SurplusCashier")
+  surplusSettlementsPaid   CashierSurplusSettlement[]  @relation("SurplusPaidBy")
 
   @@index([companyId])
   @@map("users")
@@ -408,21 +422,24 @@ model StockMovement {
 // Income-generating actions that aren't physical product sales
 // (e.g. printing, browsing, repairs, software installs).
 model Service {
-  id          String   @id @default(uuid())
-  shopId      String
-  name        String
-  price       Decimal  @db.Decimal(12, 2)
-  category    String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  createdById String?
+  id             String         @id @default(uuid())
+  shopId         String
+  name           String
+  price          Decimal        @db.Decimal(12, 2)
+  category       String?
+  paymentMethod  PaymentMethod?
+  mpesaReference String?
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  createdById    String?
 
   shop      Shop  @relation(fields: [shopId], references: [id])
   createdBy User? @relation("ServiceCreatedBy", fields: [createdById], references: [id])
 
   @@index([shopId])
   @@index([createdById])
+  @@index([shopId, paymentMethod, createdAt])
   @@index([shopId, createdAt, id])
   @@map("services")
 }
@@ -600,14 +617,19 @@ model CartItem {
   belowFloor          Boolean       @default(false)
   discountReason      String?
   discountAppliedById String?
+  surplusUnitAmount   Decimal       @default(0) @db.Decimal(12, 2)
+  surplusReason       String?
+  surplusAppliedById  String?
   createdAt           DateTime      @default(now())
 
   cart              Cart  @relation(fields: [cartId], references: [id], onDelete: Cascade)
   discountAppliedBy User? @relation("CartDiscountAppliedBy", fields: [discountAppliedById], references: [id])
+  surplusAppliedBy  User? @relation("CartSurplusAppliedBy", fields: [surplusAppliedById], references: [id])
 
   @@unique([cartId, itemType, itemId])
   @@index([cartId])
   @@index([discountAppliedById])
+  @@index([surplusAppliedById])
   @@map("cart_items")
 }
 
@@ -675,13 +697,20 @@ model OrderLineItem {
   belowFloor          Boolean       @default(false) // true if finalUnitPrice < computed profit floor
   discountReason      String?
   discountAppliedById String?
+  surplusUnitAmount   Decimal       @default(0) @db.Decimal(12, 2)
+  surplusTotal        Decimal       @default(0) @db.Decimal(12, 2)
+  surplusReason       String?
+  surplusAppliedById  String?
   createdAt           DateTime      @default(now())
 
-  order             Order            @relation(fields: [orderId], references: [id])
-  discountAppliedBy User?            @relation("DiscountAppliedBy", fields: [discountAppliedById], references: [id])
-  refundLineItems   RefundLineItem[]
+  order                  Order                          @relation(fields: [orderId], references: [id])
+  discountAppliedBy      User?                          @relation("DiscountAppliedBy", fields: [discountAppliedById], references: [id])
+  refundLineItems        RefundLineItem[]
+  surplusAppliedBy       User?                          @relation("OrderSurplusAppliedBy", fields: [surplusAppliedById], references: [id])
+  surplusSettlementLines CashierSurplusSettlementLine[]
 
   @@index([orderId])
+  @@index([surplusAppliedById])
   @@map("order_line_items")
 }
 
@@ -752,6 +781,7 @@ model RefundLineItem {
   quantity        Int
   amount          Decimal           @db.Decimal(12, 2)
   disposition     RefundDisposition
+  surplusReversed Decimal           @default(0) @db.Decimal(12, 2)
 
   refund        Refund        @relation(fields: [refundId], references: [id])
   orderLineItem OrderLineItem @relation(fields: [orderLineItemId], references: [id])
@@ -781,6 +811,45 @@ model RefundPayment {
   @@index([method, status, createdAt])
   @@index([referenceCode])
   @@map("refund_payments")
+}
+
+// Money paid by the company to a cashier for negotiated selling prices above
+// catalogue price. Allocations keep every paid surplus traceable to its sale.
+model CashierSurplusSettlement {
+  id             String        @id @default(uuid())
+  shopId         String
+  cashierId      String
+  paidById       String
+  periodStart    DateTime      @db.Date
+  periodEnd      DateTime      @db.Date
+  amount         Decimal       @db.Decimal(12, 2)
+  paymentMethod  PaymentMethod
+  mpesaReference String?
+  paidAt         DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+
+  shop    Shop                           @relation(fields: [shopId], references: [id])
+  cashier User                           @relation("SurplusCashier", fields: [cashierId], references: [id])
+  paidBy  User                           @relation("SurplusPaidBy", fields: [paidById], references: [id])
+  lines   CashierSurplusSettlementLine[]
+
+  @@index([shopId, paidAt])
+  @@index([cashierId, paidAt])
+  @@map("cashier_surplus_settlements")
+}
+
+model CashierSurplusSettlementLine {
+  id              String  @id @default(uuid())
+  settlementId    String
+  orderLineItemId String
+  amount          Decimal @db.Decimal(12, 2)
+
+  settlement    CashierSurplusSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  orderLineItem OrderLineItem            @relation(fields: [orderLineItemId], references: [id])
+
+  @@unique([settlementId, orderLineItemId])
+  @@index([orderLineItemId])
+  @@map("cashier_surplus_settlement_lines")
 }
 
 // Stock leaving inventory outside of a sale (damaged, expired, lost, theft).

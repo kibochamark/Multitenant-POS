@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+.env
+postgres-data
+redis-data
+coverage
+*.log

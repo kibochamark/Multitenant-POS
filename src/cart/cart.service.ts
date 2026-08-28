@@ -4,6 +4,7 @@ import { ActiveCartQueryDto, ScanBarcodeDto } from './dto/scan-barcode.dto';
 import { CheckoutCartDto } from './dto/checkout-cart.dto';
 import { ApplyCartDiscountDto } from './dto/apply-cart-discount.dto';
 import { DiscountType, Prisma } from 'generated/prisma/client';
+import { ApplyCartUpsellDto } from './dto/apply-cart-upsell.dto';
 
 @Injectable()
 export class CartService {
@@ -62,6 +63,11 @@ export class CartService {
       new Prisma.Decimal(data.value),
       data.reason,
     );
+  }
+
+  async applyUpsell(shopId: string, cartId: string, cartItemId: string, staffId: string, data: ApplyCartUpsellDto) {
+    this.logger.log(`Preparing cart-item upsell for shop ${shopId}`);
+    return await this.repository.applyUpsell(shopId, cartId, cartItemId, staffId, data.stationId.trim(), new Prisma.Decimal(data.negotiatedUnitPrice), data.reason);
   }
 
   checkout(
