@@ -19,6 +19,7 @@ import { NotificationCredentialsService } from './notification-credentials.servi
 import { NotificationDeliveryService } from './notification-delivery.service';
 import { NotificationTemplateController } from './notification-template.controller';
 import { NotificationTemplateService } from './notification-template.service';
+import { EmailProvider } from './providers/email.provider';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { NotificationTemplateService } from './notification-template.service';
     NotificationProcessor,
     WhatsAppProvider,
     LogNotificationProvider,
+    EmailProvider,
     SmsProvider,
     InAppNotificationService,
     InAppNotificationRepository,

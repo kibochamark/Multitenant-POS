@@ -18,7 +18,7 @@ export class NotificationChannelService {
   async list(userId: string) {
     const channels = await this.repository.list(userId);
     const byChannel = new Map(channels.map((item) => [item.channel, item]));
-    return [NotificationChannel.IN_APP, NotificationChannel.WHATSAPP].map((channel) => {
+    return [NotificationChannel.IN_APP, NotificationChannel.WHATSAPP, NotificationChannel.EMAIL].map((channel) => {
       const item = byChannel.get(channel);
       const configuration = (item?.configuration ?? {}) as WhatsAppConfiguration;
       return {
@@ -37,6 +37,13 @@ export class NotificationChannelService {
   async update(userId: string, channel: NotificationChannel, data: UpdateNotificationChannelDto) {
     if (channel === NotificationChannel.IN_APP) {
       await this.repository.upsert(userId, channel, { enabled: data.enabled });
+      return this.list(userId);
+    }
+    if (channel === NotificationChannel.EMAIL) {
+      const destination = data.destination?.trim() || (await this.repository.find(userId, channel))?.destination;
+      if (data.enabled && (!destination || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(destination)))
+        throw new BadRequestException('A valid destination email address is required to enable email');
+      await this.repository.upsert(userId, channel, { enabled: data.enabled, destination: destination ?? null });
       return this.list(userId);
     }
     const existing = await this.repository.find(userId, channel);
@@ -71,7 +78,9 @@ export class NotificationChannelService {
       templateName: data.templateName,
       languageCode: data.languageCode,
       bodyParameters: data.bodyParameters,
-      metadata: { test: true },
+      metadata: channel === NotificationChannel.EMAIL
+        ? { test: true, subject: 'Dantech notification test', html: '<p>Your Dantech email notification channel is working.</p>' }
+        : { test: true },
     });
     const delivery = notification.deliveries[0];
     if (!delivery) throw new NotFoundException('Test delivery could not be created');

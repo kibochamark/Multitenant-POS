@@ -1,5 +1,5 @@
 import { NotificationChannel } from 'generated/prisma/client';
-import { IsArray, IsBoolean, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 export class UpdateNotificationChannelDto {
   @IsBoolean()
@@ -7,7 +7,7 @@ export class UpdateNotificationChannelDto {
 
   @IsOptional()
   @IsString()
-  @Matches(/^\+?[1-9]\d{7,14}$/)
+  @MaxLength(320)
   destination?: string;
 
   @IsOptional()
@@ -44,6 +44,7 @@ export class TestNotificationChannelDto {
 export const supportedNotificationChannels = [
   NotificationChannel.IN_APP,
   NotificationChannel.WHATSAPP,
+  NotificationChannel.EMAIL,
 ] as const;
 
 export function isSupportedNotificationChannel(value: string) {

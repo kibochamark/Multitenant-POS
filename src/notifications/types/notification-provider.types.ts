@@ -17,3 +17,11 @@ export interface DeliveryReceipt {
 }
 
 export class PermanentDeliveryError extends Error {}
+
+
+
+export interface Email {
+  subject:string
+  to:string
+  html:string
+}

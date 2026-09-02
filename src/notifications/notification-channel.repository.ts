@@ -8,7 +8,7 @@ export class NotificationChannelRepository {
 
   list(userId: string) {
     return this.prisma.userNotificationChannel.findMany({
-      where: { userId, channel: { in: [NotificationChannel.IN_APP, NotificationChannel.WHATSAPP] } },
+      where: { userId, channel: { in: [NotificationChannel.IN_APP, NotificationChannel.WHATSAPP, NotificationChannel.EMAIL] } },
       orderBy: { channel: 'asc' },
     });
   }

@@ -44,6 +44,14 @@ enum StockMovementType {
   TRANSFER_IN
   TRANSFER_OUT
   ADJUSTMENT
+  INTERNAL_USE
+}
+
+enum InternalStockUseType {
+  SHOP_OPERATIONS
+  SERVICE_MATERIAL
+  PROMOTION
+  OWNER_PERSONAL
 }
 
 enum OrderStatus {
@@ -130,6 +138,7 @@ enum NotificationChannel {
   IN_APP
   WHATSAPP
   SMS
+  EMAIL
 }
 
 enum NotificationDeliveryStatus {
@@ -182,6 +191,9 @@ enum AccountPurpose {
   CASHIER_SURPLUS_EXPENSE
   SALES_DISCOUNTS
   BAD_DEBT_EXPENSE
+  INTERNAL_USE_EXPENSE
+  SERVICE_MATERIAL_EXPENSE
+  MARKETING_EXPENSE
 }
 
 enum AccountingPeriodStatus {
@@ -218,6 +230,7 @@ enum AccountingEventType {
   MANUAL_ADJUSTMENT
   CASHIER_SURPLUS_SETTLEMENT
   CREDIT_ADJUSTMENT
+  INTERNAL_STOCK_USE
 }
 
 enum AccountingSourceType {
@@ -234,6 +247,7 @@ enum AccountingSourceType {
   MANUAL_JOURNAL
   SHOP_DAILY_ACCOUNT
   CASHIER_SURPLUS_SETTLEMENT
+  INTERNAL_STOCK_USE
 }
 
 // ─────────────────────────────────────────────────────────
@@ -278,6 +292,7 @@ model Shop {
   orders             Order[]
   expenses           Expense[]
   writeOffs          WriteOff[]
+  internalStockUses  InternalStockUse[]
   userRoles          UserShopRole[]
   notifications      Notification[]
   mpesaAccounts      MpesaAccount[]
@@ -310,6 +325,7 @@ model User {
   cartsHandled             Cart[]                      @relation("CartStaff")
   cartDiscountsApplied     CartItem[]                  @relation("CartDiscountAppliedBy")
   writeOffs                WriteOff[]                  @relation("WriteOffStaff")
+  internalStockUses        InternalStockUse[]          @relation("InternalStockUsedBy")
   refundsIssued            Refund[]                    @relation("RefundStaff")
   expensesRecorded         Expense[]                   @relation("ExpenseRecordedBy")
   servicesRecorded         Service[]                   @relation("ServiceCreatedBy")
@@ -375,10 +391,11 @@ model Product {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  shop           Shop            @relation(fields: [shopId], references: [id])
-  stockCache     StockCache?
-  stockMovements StockMovement[]
-  writeOffs      WriteOff[]
+  shop              Shop               @relation(fields: [shopId], references: [id])
+  stockCache        StockCache?
+  stockMovements    StockMovement[]
+  writeOffs         WriteOff[]
+  internalStockUses InternalStockUse[]
 
   @@unique([shopId, barcode]) // barcode is unique per shop, not globally
   @@index([shopId])
@@ -871,6 +888,31 @@ model WriteOff {
   @@index([shopId])
   @@index([productId])
   @@map("write_offs")
+}
+
+// Inventory deliberately consumed without a customer sale. The cost snapshot
+// keeps historical accounting stable even if Product.costPrice changes later.
+model InternalStockUse {
+  id               String               @id @default(uuid())
+  shopId           String
+  productId        String
+  usedById         String
+  type             InternalStockUseType
+  quantity         Int
+  unitCostSnapshot Decimal              @db.Decimal(12, 2)
+  totalCost        Decimal              @db.Decimal(12, 2)
+  reason           String
+  note             String?
+  createdAt        DateTime             @default(now())
+
+  shop    Shop    @relation(fields: [shopId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+  usedBy  User    @relation("InternalStockUsedBy", fields: [usedById], references: [id])
+
+  @@index([shopId, createdAt])
+  @@index([productId, createdAt])
+  @@index([usedById])
+  @@map("internal_stock_uses")
 }
 
 // ─────────────────────────────────────────────────────────

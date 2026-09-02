@@ -7,6 +7,7 @@ import { NotificationDeliveryRepository } from './notification-delivery.reposito
 import { LogNotificationProvider } from './providers/log.provider';
 import { WhatsAppProvider } from './providers/whatsapp.provider';
 import { PermanentDeliveryError, WhatsAppCredentials } from './types/notification-provider.types';
+import { EmailProvider } from './providers/email.provider';
 
 @Injectable()
 export class NotificationDeliveryService {
@@ -17,21 +18,25 @@ export class NotificationDeliveryService {
     private readonly config: ConfigService,
     private readonly whatsapp: WhatsAppProvider,
     private readonly logProvider: LogNotificationProvider,
+    private readonly emailProvider: EmailProvider,
   ) {}
 
   async deliver(deliveryId: string) {
     const delivery = await this.repository.find(deliveryId);
-    console.log(delivery, "reached")
     if (!delivery || delivery.status === NotificationDeliveryStatus.SENT || delivery.status === NotificationDeliveryStatus.SKIPPED) return;
+
     await this.repository.markProcessing(delivery.id);
     try {
       const result = delivery.channel === NotificationChannel.IN_APP
         ? await this.deliverInApp(delivery)
         : delivery.channel === NotificationChannel.WHATSAPP
           ? await this.deliverWhatsApp(delivery)
-          : await this.repository.markSkipped(delivery.id, `${delivery.channel} is not supported`);
+          : delivery.channel === NotificationChannel.EMAIL
+            ? await this.deliverEmail(delivery)
+            : await this.repository.markSkipped(delivery.id, `${delivery.channel} is not supported`);
       await this.recordTestStatus(delivery, NotificationDeliveryStatus.SENT);
       return result;
+
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown delivery failure';
       await this.repository.markFailed(delivery.id, message);
@@ -48,6 +53,37 @@ export class NotificationDeliveryService {
 
   private deliverInApp(delivery: Awaited<ReturnType<NotificationDeliveryRepository['find']>> & {}) {
     return this.repository.publishInApp(delivery.id, delivery.notificationId, delivery.userId);
+  }
+
+  private async deliverEmail(delivery: Awaited<ReturnType<NotificationDeliveryRepository['find']>> & {}) {
+    const channel = delivery.user.notificationChannels.find(({ channel }) => channel === NotificationChannel.EMAIL);
+
+    if (!channel?.enabled) return this.repository.markSkipped(delivery.id, 'Email is disabled');
+
+    const metadata = (delivery.notification.metadata ?? {}) as { subject?: string; html?: string };
+
+    const subject = metadata.subject ?? this.emailSubject(delivery.notification.type);
+    const html = metadata.html ?? `<p>${this.escapeHtml(delivery.notification.message).replace(/\n/g, '<br>')}</p>`;
+
+    await this.emailProvider.send({
+      subject,
+      to: delivery.destination,
+      html,
+    });
+    await this.repository.markSent(delivery.id, `email:${delivery.id}`);
+  }
+
+  private emailSubject(type: string) {
+    return type.toLowerCase().split('_').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  }
+
+  private escapeHtml(value: string) {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
   }
 
   private async deliverWhatsApp(delivery: Awaited<ReturnType<NotificationDeliveryRepository['find']>> & {}) {

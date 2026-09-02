@@ -75,6 +75,6 @@ export class ScheduledJobsRepository {
       return p ?? p.stockCache.currentQuantity <= p.lowStockThreshold
     })
     
-    return lowstock
+    return lowstock as any[]
   }
 }

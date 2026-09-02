@@ -12,7 +12,7 @@ export class NotificationDeliveryRepository {
       where: {
         userId,
         enabled: true,
-        channel: { in: [NotificationChannel.IN_APP, NotificationChannel.WHATSAPP] },
+        channel: { in: [NotificationChannel.IN_APP, NotificationChannel.WHATSAPP, NotificationChannel.EMAIL] },
       },
       select: { channel: true, destination: true },
     });

@@ -22,6 +22,9 @@ const SHOP_ACCOUNTS: Array<{ code: string; name: string; type: AccountType; purp
   { code: '5900', name: 'Cash over and short', type: AccountType.EXPENSE, purpose: AccountPurpose.CASH_OVER_SHORT },
   { code: '5950', name: 'Cashier surplus expense', type: AccountType.EXPENSE, purpose: AccountPurpose.CASHIER_SURPLUS_EXPENSE },
   { code: '5960', name: 'Bad debt expense', type: AccountType.EXPENSE, purpose: AccountPurpose.BAD_DEBT_EXPENSE },
+  { code: '5970', name: 'Internal stock use expense', type: AccountType.EXPENSE, purpose: AccountPurpose.INTERNAL_USE_EXPENSE },
+  { code: '5980', name: 'Service material expense', type: AccountType.EXPENSE, purpose: AccountPurpose.SERVICE_MATERIAL_EXPENSE },
+  { code: '5990', name: 'Marketing and promotion expense', type: AccountType.EXPENSE, purpose: AccountPurpose.MARKETING_EXPENSE },
 ];
 
 @Injectable()

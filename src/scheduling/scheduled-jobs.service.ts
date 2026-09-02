@@ -71,18 +71,27 @@ export class ScheduledJobsService {
           shop.id
         );
 
+        const lowStockProducts = summary.map((product) => `${product.name} (Stock: ${product.stockCache?.currentQuantity ?? 0}, Threshold: ${product.lowStockThreshold})`);
+
+
         await this.notifications.createForUser({
           userId: owner.id,
           shopId: shop.id,
           dedupeKey: `lowstock-summary:${shop.id}:${date}`,
           type: 'LOW_STOCK',
-          message: `${shop.name}: ${summary.length + 1} low-stock products.`,
+          message: `${shop.name}: ${summary.length + 1} low-stock products. 
+          
+          ${lowStockProducts.join('\n')}
+          
+          `,
           templateName: '',
           bodyParameters: [
             shop.name,
             date
           ],
-          metadata: {},
+          metadata: {
+            subject: `${shop.name}: ${summary.length + 1} low-stock products.`,
+          },
         });
       }
     }

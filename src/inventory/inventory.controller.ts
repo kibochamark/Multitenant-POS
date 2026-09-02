@@ -17,6 +17,7 @@ import {
   MovementQueryDto,
   RestockProductDto,
   WriteOffProductDto,
+  InternalStockUseDto,
 } from './dto/inventory.dto';
 import { InventoryService } from './inventory.service';
 
@@ -77,6 +78,22 @@ export class InventoryController {
       request.user!.id,
       data,
     );
+    return { status: 201, data: result, error: null };
+  }
+
+  @Post('internal-use')
+  @Version('1')
+  @HttpCode(201)
+  @RequireShopAccess('shopId', 'OWNER', 'MANAGER')
+  async internalUse(
+    @Param('shopId') shopId: string,
+    @Param('productId') productId: string,
+    @Req() request: AuthenticatedRequest,
+    @Body() data: InternalStockUseDto,
+  ) {
+    this.logger.log(`Internal stock-use request received for product ${productId}`);
+    const canRecordOwnerPersonal = request.user!.defaultOwner || request.shopAccess?.role === 'OWNER';
+    const result = await this.service.internalUse(shopId, productId, request.user!.id, canRecordOwnerPersonal, data);
     return { status: 201, data: result, error: null };
   }
 

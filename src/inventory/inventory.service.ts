@@ -4,6 +4,7 @@ import {
   MovementQueryDto,
   RestockProductDto,
   WriteOffProductDto,
+  InternalStockUseDto,
 } from './dto/inventory.dto';
 import { InventoryRepository } from './inventory.repository';
 
@@ -43,6 +44,11 @@ export class InventoryService {
       userId,
       data.note?.trim(),
     );
+  }
+
+  async internalUse(shopId: string, productId: string, userId: string, canRecordOwnerPersonal: boolean, data: InternalStockUseDto) {
+    this.logger.log(`Preparing internal stock use for product ${productId}`);
+    return await this.repository.internalUse(shopId, productId, data.quantity, data.type, data.reason.trim(), userId, canRecordOwnerPersonal, data.note?.trim());
   }
 
   adjust(

@@ -19,7 +19,6 @@ export class NotificationChannelController {
   @Put(':channel')
   @Version('1')
   async update(@Req() request: AuthenticatedRequest, @Param('channel') value: string, @Body() data: UpdateNotificationChannelDto) {
-     console.log('Updating notification channel with data:', data);
     const channel = this.channel(value);
     return { status: 200, data: await this.service.update(request.user!.id, channel, data), error: null };
   }
@@ -33,7 +32,7 @@ export class NotificationChannelController {
 
   private channel(value: string) {
     const channel = value.toUpperCase();
-    if (!isSupportedNotificationChannel(channel)) throw new BadRequestException('Only IN_APP and WHATSAPP are supported');
+    if (!isSupportedNotificationChannel(channel)) throw new BadRequestException('Only IN_APP, WHATSAPP, and EMAIL are supported');
     return channel as NotificationChannel;
   }
 }
